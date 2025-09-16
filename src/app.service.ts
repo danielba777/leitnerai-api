@@ -17,12 +17,12 @@ export class AppService {
       for (const entry of iface) {
         // Check for private IPv4 address (skip loopback and non-IPv4 addresses)
         if (!entry.internal && entry.family === 'IPv4') {
-          return entry.address; // Return private IP address
+          return `${entry.address} - Daniel`; // Return private IP address
         }
       }
     }
 
     // If private IP is not found, return hostname
-    return os.hostname();
+    return `${os.hostname()} - Daniel`;
   }
 }

@@ -18,8 +18,9 @@ if [ ! -d "$APP_DIR" ]; then
   git clone --depth=1 https://github.com/danielba777/leitnerai-api.git "$APP_DIR"
 fi
 cd "$APP_DIR"
-npm ci --omit=dev
+npm ci
 npm run build
+npm prune --production
 
 cat > ecosystem.config.js <<'EOF'
 module.exports = {

@@ -18,8 +18,12 @@ import * as crypto from 'crypto';
 const REGION = process.env.AWS_REGION || 'eu-north-1';
 const INBOX_BUCKET = process.env.INBOX_BUCKET || '';
 const RESULTS_BUCKET = process.env.RESULTS_BUCKET || '';
-const QUEUE_URL = process.env.QUEUE_URL || '';
+const QUEUE_URL = process.env.SQS_QUEUE_URL ?? process.env.QUEUE_URL ?? '';
 const TABLE_NAME = process.env.TABLE_NAME || '';
+
+if (!QUEUE_URL) {
+  throw new Error('SQS_QUEUE_URL/QUEUE_URL is not set');
+}
 
 @Injectable()
 export class AppService {

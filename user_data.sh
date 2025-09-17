@@ -1,12 +1,22 @@
 #!/bin/bash
 set -euxo pipefail
-exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
-echo "AWS_REGION=eu-north-1"                             | tee -a /etc/environment
-echo "INBOX_BUCKET=leitnerai-inbox-7634-8705-3303"       | tee -a /etc/environment
-echo "RESULTS_BUCKET=leitnerai-results-7634-8705-3303"  | tee -a /etc/environment
-echo "QUEUE_URL=https://sqs.eu-north-1.amazonaws.com/763487053303/leitnerai-jobs" | tee -a /etc/environment
-echo "TABLE_NAME=leitnerai-jobs"                         | tee -a /etc/environment
+AWS_REGION="eu-north-1"
+INBOX_BUCKET="leitnerai-inbox-7634-8705-3303"
+RESULTS_BUCKET="leitnerai-inbox-7634-8705-3303"
+TABLE_NAME="leitnerai-jobs"
+SQS_QUEUE_URL="https://sqs.eu-north-1.amazonaws.com/763487053303/leitnerai-jobs-queue"
+QUEUE_URL="$SQS_QUEUE_URL"
+
+{
+  echo "AWS_REGION=${AWS_REGION}"
+  echo "INBOX_BUCKET=${INBOX_BUCKET}"
+  echo "RESULTS_BUCKET=${RESULTS_BUCKET}"
+  echo "TABLE_NAME=${TABLE_NAME}"
+  echo "SQS_QUEUE_URL=${SQS_QUEUE_URL}"
+  echo "QUEUE_URL=${QUEUE_URL}"
+} | tee -a /etc/environment
 
 curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
 apt-get update -y
@@ -36,7 +46,20 @@ module.exports = {
 EOF
 
 chown -R ubuntu:ubuntu "$APP_DIR"
-sudo -u ubuntu pm2 start ecosystem.config.js
+
+sudo -u ubuntu env \
+  AWS_REGION="${AWS_REGION}" \
+  INBOX_BUCKET="${INBOX_BUCKET}" \
+  RESULTS_BUCKET="${RESULTS_BUCKET}" \
+  TABLE_NAME="${TABLE_NAME}" \
+  SQS_QUEUE_URL="${SQS_QUEUE_URL}" \
+  QUEUE_URL="${QUEUE_URL}" \
+  pm2 start "$APP_DIR/ecosystem.config.js" --update-env
+
 sudo -u ubuntu pm2 save
 pm2 startup systemd -u ubuntu --hp /home/ubuntu
 systemctl enable pm2-ubuntu
+systemctl restart pm2-ubuntu || true
+
+sleep 2
+curl -fsS http://127.0.0.1:3000/health || true

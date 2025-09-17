@@ -121,17 +121,22 @@ export class AppService {
 
   // ---- Presigned GET fürs Ergebnis (optional) ----
   async getResultDownloadUrl(jobId: string) {
+    const isFinished = (val?: string) =>
+      (val ?? '').toLowerCase() === 'done' ||
+      (val ?? '').toLowerCase() === 'completed' ||
+      (val ?? '').toLowerCase() === 'success';
+
     const s = await this.getStatus(jobId);
-    const st = (s.status ?? '').toString().toLowerCase();
-    if (!['done', 'completed', 'success'].includes(st) || !s.resultKey) {
+    if (!isFinished(s.status) || !s.resultKey) {
       throw new BadRequestException('Job not finished or no resultKey.');
     }
+
     const cmd = new GetObjectCommand({
       Bucket: RESULTS_BUCKET,
       Key: s.resultKey,
     });
     const url = await getSignedUrl(this.s3, cmd, { expiresIn: 900 });
-    return { jobId, url };
+    return { url, resultKey: s.resultKey };
   }
 
   // ---- Health ----

@@ -122,7 +122,8 @@ export class AppService {
   // ---- Presigned GET fürs Ergebnis (optional) ----
   async getResultDownloadUrl(jobId: string) {
     const s = await this.getStatus(jobId);
-    if (s.status !== 'done' || !s.resultKey) {
+    const st = (s.status ?? '').toString().toLowerCase();
+    if (!['done', 'completed', 'success'].includes(st) || !s.resultKey) {
       throw new BadRequestException('Job not finished or no resultKey.');
     }
     const cmd = new GetObjectCommand({

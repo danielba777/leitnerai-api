@@ -25,6 +25,43 @@ if (!QUEUE_URL) {
   throw new Error('SQS_QUEUE_URL/QUEUE_URL is not set');
 }
 
+// Sprach-Normalisierung (einfach & robust)
+const LANG_MAP: Record<string, string> = {
+  en: 'en',
+  english: 'en',
+  englisch: 'en',
+  de: 'de',
+  german: 'de',
+  deutsch: 'de',
+  es: 'es',
+  spanish: 'es',
+  spanisch: 'es',
+  fr: 'fr',
+  french: 'fr',
+  französisch: 'fr',
+  ja: 'ja',
+  japanese: 'ja',
+  japanisch: 'ja',
+  ko: 'ko',
+  korean: 'ko',
+  koreanisch: 'ko',
+  'pt-br': 'pt-Br',
+  'pt_br': 'pt-Br',
+  pt: 'pt-Br',
+  portuguese: 'pt-Br',
+  portugiesisch: 'pt-Br',
+  ru: 'ru',
+  russian: 'ru',
+  russisch: 'ru',
+  unknown: 'unknown',
+};
+
+function normalizeLanguage(lang?: string) {
+  if (!lang) return 'unknown';
+  const key = lang.trim().toLowerCase();
+  return LANG_MAP[key] ?? lang;
+}
+
 @Injectable()
 export class AppService {
   private s3 = new S3Client({ region: REGION });
@@ -62,7 +99,7 @@ export class AppService {
   }
 
   // ---- Job einstellen (DDB + SQS) ----
-  async enqueueJob(jobId: string, s3Key: string, ocr?: boolean) {
+  async enqueueJob(jobId: string, s3Key: string, ocr?: boolean, language?: string) {
     if (!s3Key.startsWith('uploads/')) {
       throw new BadRequestException('s3Key must start with "uploads/".');
     }
@@ -85,6 +122,8 @@ export class AppService {
       }),
     );
 
+    const lang = normalizeLanguage(language);
+
     await this.sqs.send(
       new SendMessageCommand({
         QueueUrl: QUEUE_URL,
@@ -93,7 +132,7 @@ export class AppService {
           s3Key,
           bucket: INBOX_BUCKET,
           resultsBucket: RESULTS_BUCKET,
-          options: { ocr: !!ocr },
+          options: { ocr: !!ocr, language: lang },
         }),
       }),
     );

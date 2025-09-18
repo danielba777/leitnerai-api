@@ -39,7 +39,7 @@ export class AppController {
   extract(@Body() body: ExtractDto) {
     if (!body?.jobId || !body?.s3Key)
       throw new BadRequestException('jobId & s3Key required');
-    return this.app.enqueueJob(body.jobId, body.s3Key, body.ocr);
+    return this.app.enqueueJob(body.jobId, body.s3Key, body.ocr, body.language);
   }
 
   @Get('/status/:id')

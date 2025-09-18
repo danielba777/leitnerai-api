@@ -57,14 +57,14 @@ export class UploadUrlDto { filename: string }
 
     •	src/dto/extract.dto.ts
 
-export class ExtractDto { jobId: string; s3Key: string; ocr?: boolean }
+export class ExtractDto { jobId: string; s3Key: string; ocr?: boolean; language?: string }
 
 Service-Funktionen (AppService)
 • createUploadUrl(filename) → presigned PUT (uploads/<jobId>\_<safeName>.pdf)
-• enqueueJob(jobId, s3Key, ocr?)
+• enqueueJob(jobId, s3Key, ocr?, language?)
 • HeadObject auf INBOX_BUCKET/s3Key (existiert?)
 • DDB PutItem: { jobId, status:'queued', s3Key, createdAt }
-• SQS SendMessage: { jobId, s3Key, bucket, resultsBucket, options:{ocr} }
+• SQS SendMessage: { jobId, s3Key, bucket, resultsBucket, options:{ocr, language} }
 • getStatus(jobId) → DDB GetItem → { status, resultKey?, error? }
 • getResultDownloadUrl(jobId) → presigned GET für RESULTS_BUCKET/resultKey
 • health() → { ok: true }

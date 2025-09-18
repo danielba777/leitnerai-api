@@ -10,4 +10,8 @@ export class ExtractDto {
   @IsOptional()
   @IsBoolean()
   ocr?: boolean; // optional: OCR-Wunsch
+
+  @IsOptional()
+  @IsString()
+  language?: string; // z.B. "en", "de", "Englisch", "Deutsch", "unknown"
 }

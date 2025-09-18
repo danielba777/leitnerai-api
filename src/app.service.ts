@@ -185,6 +185,19 @@ export class AppService {
     return { url, resultKey: s.resultKey };
   }
 
+  async getAssetSignedUrl(key: string) {
+    if (!key.startsWith('results/')) {
+      throw new BadRequestException('key must start with "results/".');
+    }
+
+    const cmd = new GetObjectCommand({
+      Bucket: RESULTS_BUCKET,
+      Key: key,
+    });
+    const url = await getSignedUrl(this.s3, cmd, { expiresIn: 900 });
+    return { url };
+  }
+
   // ---- Health ----
   health() {
     return { ok: true };

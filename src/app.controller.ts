@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   BadRequestException,
 } from '@nestjs/common';
 import { AppService } from './app.service';
@@ -50,5 +51,11 @@ export class AppController {
   @Get('/download/:id')
   download(@Param('id') id: string) {
     return this.app.getResultDownloadUrl(id);
+  }
+
+  @Get('/asset')
+  getAsset(@Query('key') key?: string) {
+    if (!key) throw new BadRequestException('key required');
+    return this.app.getAssetSignedUrl(key);
   }
 }

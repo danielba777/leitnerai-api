@@ -67,11 +67,13 @@ Service-Funktionen (AppService)
 • SQS SendMessage: { jobId, s3Key, bucket, resultsBucket, language, options:{ocr, language} }
 • getStatus(jobId) → DDB GetItem → { status, resultKey?, error? }
 • getResultDownloadUrl(jobId) → presigned GET für RESULTS_BUCKET/resultKey
+• getAssetSignedUrl(key) → presigned GET für RESULTS_BUCKET/key (nur results/*)
 • health() → { ok: true }
 • Bestehende Demo-Route /host bleibt zu Debugzwecken erhalten.
 
 Controller (AppController)
 • Obige Routes exakt abbilden; 400 werfen bei fehlenden/invaliden Params.
+• GET /asset?key=results/... → signierten Download zurückgeben
 
 ⸻
 

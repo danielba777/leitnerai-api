@@ -124,20 +124,27 @@ export class AppService {
 
     const lang = normalizeLanguage(language);
 
+    const message = {
+      jobId,
+      s3Key,
+      bucket: INBOX_BUCKET,
+      resultsBucket: RESULTS_BUCKET,
+      // keep a top-level language for legacy workers
+      language: lang,
+      options: {
+        ocr: !!ocr,
+        language: lang,
+      },
+    };
+
     await this.sqs.send(
       new SendMessageCommand({
         QueueUrl: QUEUE_URL,
-        MessageBody: JSON.stringify({
-          jobId,
-          s3Key,
-          bucket: INBOX_BUCKET,
-          resultsBucket: RESULTS_BUCKET,
-          options: { ocr: !!ocr, language: lang },
-        }),
+        MessageBody: JSON.stringify(message),
       }),
     );
 
-    return { jobId };
+    return { jobId, language: lang };
   }
 
   // ---- Status lesen ----

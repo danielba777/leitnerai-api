@@ -64,7 +64,7 @@ Service-Funktionen (AppService)
 • enqueueJob(jobId, s3Key, ocr?, language?)
 • HeadObject auf INBOX_BUCKET/s3Key (existiert?)
 • DDB PutItem: { jobId, status:'queued', s3Key, createdAt }
-• SQS SendMessage: { jobId, s3Key, bucket, resultsBucket, options:{ocr, language} }
+• SQS SendMessage: { jobId, s3Key, bucket, resultsBucket, language, options:{ocr, language} }
 • getStatus(jobId) → DDB GetItem → { status, resultKey?, error? }
 • getResultDownloadUrl(jobId) → presigned GET für RESULTS_BUCKET/resultKey
 • health() → { ok: true }

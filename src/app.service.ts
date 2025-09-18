@@ -20,6 +20,12 @@ const INBOX_BUCKET = process.env.INBOX_BUCKET || '';
 const RESULTS_BUCKET = process.env.RESULTS_BUCKET || '';
 const QUEUE_URL = process.env.SQS_QUEUE_URL ?? process.env.QUEUE_URL ?? '';
 const TABLE_NAME = process.env.TABLE_NAME || '';
+const ASSET_URL_MODE = process.env.ASSET_URL_MODE || 'asset';
+
+function s3PublicUrl(bucket: string, region: string, key: string) {
+  const escaped = key.split('/').map(encodeURIComponent).join('/');
+  return `https://${bucket}.s3.${region}.amazonaws.com/${escaped}`;
+}
 
 if (!QUEUE_URL) {
   throw new Error('SQS_QUEUE_URL/QUEUE_URL is not set');
@@ -162,6 +168,8 @@ export class AppService {
       status: i.status?.S ?? 'unknown',
       resultKey: i.resultKey?.S,
       error: i.error?.S,
+      resultsBucket: i.resultsBucket?.S,
+      publicJsonUrl: i.publicJsonUrl?.S,
     };
   }
 
@@ -177,8 +185,19 @@ export class AppService {
       throw new BadRequestException('Job not finished or no resultKey.');
     }
 
+    if (s.publicJsonUrl) {
+      return { url: s.publicJsonUrl, resultKey: s.resultKey };
+    }
+
+    const bucket = s.resultsBucket || RESULTS_BUCKET || INBOX_BUCKET;
+
+    if (ASSET_URL_MODE === 's3-public') {
+      const url = s3PublicUrl(bucket, REGION, s.resultKey);
+      return { url, resultKey: s.resultKey };
+    }
+
     const cmd = new GetObjectCommand({
-      Bucket: RESULTS_BUCKET,
+      Bucket: bucket,
       Key: s.resultKey,
     });
     const url = await getSignedUrl(this.s3, cmd, { expiresIn: 900 });

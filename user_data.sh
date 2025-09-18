@@ -4,7 +4,7 @@ exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&
 
 AWS_REGION="eu-north-1"
 INBOX_BUCKET="leitnerai-inbox-7634-8705-3303"
-RESULTS_BUCKET="leitnerai-inbox-7634-8705-3303"
+RESULTS_BUCKET="leitnerai-results-7634-8705-3303"
 TABLE_NAME="leitnerai-jobs"
 SQS_QUEUE_URL="https://sqs.eu-north-1.amazonaws.com/763487053303/leitnerai-jobs-queue"
 QUEUE_URL="$SQS_QUEUE_URL"

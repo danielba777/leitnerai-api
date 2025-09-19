@@ -56,16 +56,39 @@ const LANG_MAP: Record<string, string> = {
   pt: 'pt-Br',
   portuguese: 'pt-Br',
   portugiesisch: 'pt-Br',
+  it: 'it',
+  italian: 'it',
+  italienisch: 'it',
   ru: 'ru',
   russian: 'ru',
   russisch: 'ru',
   unknown: 'unknown',
 };
 
+const LANGUAGE_LABEL_MAP: Record<string, string> = {
+  en: 'English',
+  de: 'German',
+  es: 'Spanish',
+  fr: 'French',
+  ja: 'Japanese',
+  ko: 'Korean',
+  ru: 'Russian',
+  'pt-Br': 'Brazilian Portuguese',
+  it: 'Italian',
+};
+
 function normalizeLanguage(lang?: string) {
   if (!lang) return 'unknown';
   const key = lang.trim().toLowerCase();
   return LANG_MAP[key] ?? lang;
+}
+
+function buildImageLanguageDirective(lang: string) {
+  if (lang === 'unknown') {
+    return 'Render the image without any text or lettering. If text is unavoidable, prefer symbols or signage without words.';
+  }
+  const friendlyName = LANGUAGE_LABEL_MAP[lang] ?? lang;
+  return `Render any visible text strictly in ${friendlyName}. Ignore or replace prompt terms in other languages.`;
 }
 
 @Injectable()
@@ -129,6 +152,7 @@ export class AppService {
     );
 
     const lang = normalizeLanguage(language);
+    const imagePromptLanguageRule = buildImageLanguageDirective(lang);
 
     const message = {
       jobId,
@@ -137,9 +161,11 @@ export class AppService {
       resultsBucket: RESULTS_BUCKET,
       // keep a top-level language for legacy workers
       language: lang,
+      imagePromptLanguageRule,
       options: {
         ocr: !!ocr,
         language: lang,
+        imagePromptLanguageRule,
       },
     };
 

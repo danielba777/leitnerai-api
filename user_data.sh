@@ -8,6 +8,8 @@ RESULTS_BUCKET="leitnerai-results-7634-8705-3303"
 TABLE_NAME="leitnerai-jobs"
 SQS_QUEUE_URL="https://sqs.eu-north-1.amazonaws.com/763487053303/leitnerai-jobs-queue"
 QUEUE_URL="$SQS_QUEUE_URL"
+DEEPSEEK_API_URL="https://api.deepseek.com/v1/chat/completions"
+REWRITE_PROVIDER="deepseek"
 
 {
   echo "AWS_REGION=${AWS_REGION}"
@@ -16,6 +18,8 @@ QUEUE_URL="$SQS_QUEUE_URL"
   echo "TABLE_NAME=${TABLE_NAME}"
   echo "SQS_QUEUE_URL=${SQS_QUEUE_URL}"
   echo "QUEUE_URL=${QUEUE_URL}"
+  echo "DEEPSEEK_API_URL=${DEEPSEEK_API_URL}"
+  echo "REWRITE_PROVIDER=${REWRITE_PROVIDER}"
 } | tee -a /etc/environment
 
 curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
@@ -47,6 +51,13 @@ EOF
 
 chown -R ubuntu:ubuntu "$APP_DIR"
 
+DEEPSEEK_API_KEY="$(aws ssm get-parameter \
+  --name "/leitnerai/deepseek_api_key" \
+  --with-decryption \
+  --query 'Parameter.Value' \
+  --output text \
+  --region "${AWS_REGION}")"
+  
 sudo -u ubuntu env \
   AWS_REGION="${AWS_REGION}" \
   INBOX_BUCKET="${INBOX_BUCKET}" \
@@ -54,6 +65,9 @@ sudo -u ubuntu env \
   TABLE_NAME="${TABLE_NAME}" \
   SQS_QUEUE_URL="${SQS_QUEUE_URL}" \
   QUEUE_URL="${QUEUE_URL}" \
+  DEEPSEEK_API_URL="${DEEPSEEK_API_URL}" \
+  REWRITE_PROVIDER="${REWRITE_PROVIDER}" \
+  DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}" \
   pm2 start "$APP_DIR/ecosystem.config.js" --update-env
 
 sudo -u ubuntu pm2 save

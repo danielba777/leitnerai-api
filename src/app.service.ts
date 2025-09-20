@@ -21,6 +21,10 @@ const RESULTS_BUCKET = process.env.RESULTS_BUCKET || '';
 const QUEUE_URL = process.env.SQS_QUEUE_URL ?? process.env.QUEUE_URL ?? '';
 const TABLE_NAME = process.env.TABLE_NAME || '';
 const ASSET_URL_MODE = process.env.ASSET_URL_MODE || 'asset';
+const DEEPSEEK_API_URL =
+  process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions';
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
+const REWRITE_PROVIDER = (process.env.REWRITE_PROVIDER || 'deepseek').toLowerCase();
 
 function s3PublicUrl(bucket: string, region: string, key: string) {
   const escaped = key.split('/').map(encodeURIComponent).join('/');
@@ -70,6 +74,16 @@ function normalizeLanguage(lang?: string) {
   const key = lang.trim().toLowerCase();
   return LANG_MAP[key] ?? lang;
 }
+
+const ENGLISH_SYSTEM_PROMPT = `
+Rephrase the text into clear academic English (around IELTS 7 level).
+Use simple words; keep technical terms unchanged. Avoid flowery language.
+`;
+
+const GERMAN_SYSTEM_PROMPT = `
+Formuliere den Text in gut lesbares, sachliches Deutsch (Niveau etwa C1).
+Verwende einfache Wörter; fachliche Begriffe unverändert lassen. Kein Blabla.
+`;
 
 @Injectable()
 export class AppService {
@@ -154,6 +168,71 @@ export class AppService {
     );
 
     return { jobId, language: lang };
+  }
+
+  async rewrite(body: {
+    text: string;
+    language?: string;
+    provider?: string;
+    model?: string;
+    temperature?: number;
+  }) {
+    const lang = normalizeLanguage(body.language);
+    const provider = (body.provider || REWRITE_PROVIDER) as 'deepseek' | 'bedrock';
+    const text = body.text.trim();
+    const temperature = typeof body.temperature === 'number' ? body.temperature : 0.72;
+    const model = body.model || 'deepseek-chat';
+
+    if (provider !== 'deepseek') {
+      throw new BadRequestException('Provider "bedrock" ist noch nicht aktiviert.');
+    }
+
+    if (!DEEPSEEK_API_KEY) {
+      throw new BadRequestException('DEEPSEEK_API_KEY ist nicht gesetzt');
+    }
+
+    const fetchImpl = (globalThis as any).fetch as
+      | ((input: any, init?: any) => Promise<any>)
+      | undefined;
+    if (typeof fetchImpl !== 'function') {
+      throw new Error('fetch ist in dieser Umgebung nicht verfügbar.');
+    }
+
+    const systemPrompt = lang === 'de' ? GERMAN_SYSTEM_PROMPT : ENGLISH_SYSTEM_PROMPT;
+
+    const resp = await fetchImpl(DEEPSEEK_API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Transform this text:\n${text}` },
+        ],
+        temperature,
+        top_p: 0.88,
+        max_tokens: 2000,
+        frequency_penalty: 0.5,
+        presence_penalty: 0.3,
+      }),
+    });
+
+    if (!resp.ok) {
+      const errTxt = await resp.text();
+      throw new BadRequestException(`DeepSeek error ${resp.status}: ${errTxt}`);
+    }
+
+    const data = await resp.json();
+    const content = data?.choices?.[0]?.message?.content ?? '';
+    return {
+      provider: 'deepseek',
+      model,
+      language: lang,
+      output: content,
+    };
   }
 
   // ---- Status lesen ----

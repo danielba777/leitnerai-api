@@ -10,6 +10,7 @@ SQS_QUEUE_URL="https://sqs.eu-north-1.amazonaws.com/763487053303/leitnerai-jobs-
 QUEUE_URL="$SQS_QUEUE_URL"
 DEEPSEEK_API_URL="https://api.deepseek.com/v1/chat/completions"
 REWRITE_PROVIDER="deepseek"
+SSM_PARAM_DEEPSEEK="/leitnerai/deepseek_api_key"
 
 {
   echo "AWS_REGION=${AWS_REGION}"
@@ -22,15 +23,29 @@ REWRITE_PROVIDER="deepseek"
   echo "REWRITE_PROVIDER=${REWRITE_PROVIDER}"
 } | tee -a /etc/environment
 
-curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
 apt-get update -y
-apt-get install -y git nodejs
+apt-get install -y git unzip curl ca-certificates
+
+curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+apt-get install -y nodejs
 npm i -g pm2
+
+TMPDIR="$(mktemp -d)"
+cd "$TMPDIR"
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip -q awscliv2.zip
+./aws/install -i /usr/local/aws -b /usr/local/bin
+aws --version
 
 APP_DIR=/home/ubuntu/nestjs-api
 if [ ! -d "$APP_DIR" ]; then
   git clone --depth=1 https://github.com/danielba777/leitnerai-api.git "$APP_DIR"
+else
+  cd "$APP_DIR"
+  git fetch --all || true
+  git reset --hard origin/main || true
 fi
+
 cd "$APP_DIR"
 npm ci
 npm run build
@@ -49,15 +64,19 @@ module.exports = {
 }
 EOF
 
-chown -R ubuntu:ubuntu "$APP_DIR"
-
 DEEPSEEK_API_KEY="$(aws ssm get-parameter \
-  --name "/leitnerai/deepseek_api_key" \
+  --name "${SSM_PARAM_DEEPSEEK}" \
   --with-decryption \
   --query 'Parameter.Value' \
   --output text \
-  --region "${AWS_REGION}")"
-  
+  --region "${AWS_REGION}" || true)"
+
+if [ -z "${DEEPSEEK_API_KEY}" ]; then
+  echo "WARN: DEEPSEEK_API_KEY leer (SSM/IAM prüfen). Server startet trotzdem."
+fi
+
+chown -R ubuntu:ubuntu "$APP_DIR"
+sudo -u ubuntu pm2 delete leitnerai-api || true
 sudo -u ubuntu env \
   AWS_REGION="${AWS_REGION}" \
   INBOX_BUCKET="${INBOX_BUCKET}" \
@@ -75,5 +94,5 @@ pm2 startup systemd -u ubuntu --hp /home/ubuntu
 systemctl enable pm2-ubuntu
 systemctl restart pm2-ubuntu || true
 
-sleep 2
+sleep 3
 curl -fsS http://127.0.0.1:3000/health || true

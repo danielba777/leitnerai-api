@@ -23,6 +23,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.894.0",
     "@aws-sdk/client-dynamodb": "^3.890.0",
     "@aws-sdk/client-s3": "^3.890.0",
     "@aws-sdk/client-sqs": "^3.890.0",

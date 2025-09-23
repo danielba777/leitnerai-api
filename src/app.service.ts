@@ -14,6 +14,11 @@ import {
   GetItemCommand,
 } from '@aws-sdk/client-dynamodb';
 import * as crypto from 'crypto';
+import {
+  BedrockRuntimeClient,
+  ConverseCommand,
+  ConverseCommandInput,
+} from '@aws-sdk/client-bedrock-runtime';
 
 const REGION = process.env.AWS_REGION || 'eu-north-1';
 const INBOX_BUCKET = process.env.INBOX_BUCKET || '';
@@ -22,9 +27,16 @@ const QUEUE_URL = process.env.SQS_QUEUE_URL ?? process.env.QUEUE_URL ?? '';
 const TABLE_NAME = process.env.TABLE_NAME || '';
 const ASSET_URL_MODE = process.env.ASSET_URL_MODE || 'asset';
 const DEEPSEEK_API_URL =
-  process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions';
+  process.env.DEEPSEEK_API_URL ||
+  'https://api.deepseek.com/v1/chat/completions';
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
-const REWRITE_PROVIDER = (process.env.REWRITE_PROVIDER || 'deepseek').toLowerCase();
+const REWRITE_PROVIDER = (
+  process.env.REWRITE_PROVIDER || 'deepseek'
+).toLowerCase();
+const BEDROCK_REGION =
+  process.env.BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
+const BEDROCK_MODEL_ID =
+  process.env.BEDROCK_MODEL_ID || 'anthropic.claude-3-haiku-20240307-v1:0';
 
 function s3PublicUrl(bucket: string, region: string, key: string) {
   const escaped = key.split('/').map(encodeURIComponent).join('/');
@@ -56,7 +68,7 @@ const LANG_MAP: Record<string, string> = {
   korean: 'ko',
   koreanisch: 'ko',
   'pt-br': 'pt-Br',
-  'pt_br': 'pt-Br',
+  pt_br: 'pt-Br',
   pt: 'pt-Br',
   portuguese: 'pt-Br',
   portugiesisch: 'pt-Br',
@@ -75,21 +87,26 @@ function normalizeLanguage(lang?: string) {
   return LANG_MAP[key] ?? lang;
 }
 
-const ENGLISH_SYSTEM_PROMPT = `
-Rephrase the text into clear academic English (around IELTS 7 level).
-Use simple words; keep technical terms unchanged. Avoid flowery language.
-`;
+const TEACHER_SYSTEM_PROMPT = `
+You’re a college teacher expert with a knack for writing gritty, heartfelt handouts that students actually read.
+Rewrite the provided text so it feels like it came straight from your pen—raw, real, and human.
+Make it professional but warm, like you’re talking to your students (18–20 years old) about something that’ll help them in school.
 
-const GERMAN_SYSTEM_PROMPT = `
-Formuliere den Text in gut lesbares, sachliches Deutsch (Niveau etwa C1).
-Verwende einfache Wörter; fachliche Begriffe unverändert lassen. Kein Blabla.
-`;
+Do this:
+• Write like you’re scribbling notes before class: short sentences, then a long ramble. Toss in a random thought, like “I saw this go wrong in my algebra class.”
+• Drop in a quick story about a student or a school moment, like forgetting a deadline or nailing a tough quiz. Make it specific but messy, not polished.
+• Skip fancy words or smooth transitions. Say “Look,” “Trust me,” or “Here’s the kicker” instead of “therefore” or “additionally.”
+• Make it feel like a teacher’s advice—think tips for surviving essays or cramming for science. Mention real stuff, like late-night study sessions or a messy backpack.
+• Change up paragraph sizes: one line here, a big chunk there. Throw in a question like “Ever bombed a test?” to sound human.
+• Don’t sound too perfect. Add a quirk, like admitting you’re bad at remembering names, to keep the tone personal and real.
+`.trim();
 
 @Injectable()
 export class AppService {
   private s3 = new S3Client({ region: REGION });
   private sqs = new SQSClient({ region: REGION });
   private db = new DynamoDBClient({ region: REGION });
+  private bedrock = new BedrockRuntimeClient({ region: BEDROCK_REGION });
 
   getHello(): string {
     return 'Hello World!';
@@ -122,7 +139,12 @@ export class AppService {
   }
 
   // ---- Job einstellen (DDB + SQS) ----
-  async enqueueJob(jobId: string, s3Key: string, ocr?: boolean, language?: string) {
+  async enqueueJob(
+    jobId: string,
+    s3Key: string,
+    ocr?: boolean,
+    language?: string,
+  ) {
     if (!s3Key.startsWith('uploads/')) {
       throw new BadRequestException('s3Key must start with "uploads/".');
     }
@@ -172,19 +194,68 @@ export class AppService {
 
   async rewrite(body: {
     text: string;
-    language?: string;
     provider?: string;
     model?: string;
     temperature?: number;
   }) {
-    const lang = normalizeLanguage(body.language);
-    const provider = (body.provider || REWRITE_PROVIDER) as 'deepseek' | 'bedrock';
+    const provider = (body.provider || REWRITE_PROVIDER) as
+      | 'deepseek'
+      | 'bedrock';
     const text = body.text.trim();
-    const temperature = typeof body.temperature === 'number' ? body.temperature : 0.72;
+    const userContent = [
+      `Input Text:\n${text}`,
+      'Task: Rewrite the text to sound like a teacher’s honest, unpolished advice for students. Make it professional but real, like it’s for a handout or blog post.',
+      'If no text is given, write a short bit about why planning ahead helps with schoolwork, using the same rules.',
+      'Output Format: Give the text as a rough, engaging piece for students, like a quick classroom note or study tip.',
+    ].join('\n\n');
+    const temperature =
+      typeof body.temperature === 'number' ? body.temperature : 0.72;
     const model = body.model || 'deepseek-chat';
 
-    if (provider !== 'deepseek') {
-      throw new BadRequestException('Provider "bedrock" ist noch nicht aktiviert.');
+    if (provider === 'bedrock') {
+      // --- Bedrock über das einheitliche Converse API ---
+      const modelId = body.model || BEDROCK_MODEL_ID;
+
+      const input: ConverseCommandInput = {
+        modelId,
+        system: [{ text: TEACHER_SYSTEM_PROMPT }],
+        messages: [
+          {
+            role: 'user',
+            content: [{ text: userContent }],
+          },
+        ],
+        inferenceConfig: {
+          temperature,
+          topP: 0.88,
+        },
+      };
+
+      try {
+        const resp = await this.bedrock.send(new ConverseCommand(input));
+        const content =
+          resp?.output?.message?.content
+            ?.map((c: any) => c?.text)
+            ?.filter(Boolean)
+            ?.join('\n') ?? '';
+
+        return {
+          provider: 'bedrock',
+          model: modelId,
+          output: content,
+        };
+      } catch (e: any) {
+        // typische Fehler: AccessDeniedException (IAM), Model not in region, Throttling
+        throw new BadRequestException(
+          `Bedrock error: ${e?.name || e?.code || 'Unknown'} - ${
+            e?.message || e
+          }`,
+        );
+      }
+    }
+
+    if (provider !== 'deepseek' && provider !== 'bedrock') {
+      throw new BadRequestException(`Unknown provider: ${provider}`);
     }
 
     if (!DEEPSEEK_API_KEY) {
@@ -198,7 +269,17 @@ export class AppService {
       throw new Error('fetch ist in dieser Umgebung nicht verfügbar.');
     }
 
-    const systemPrompt = lang === 'de' ? GERMAN_SYSTEM_PROMPT : ENGLISH_SYSTEM_PROMPT;
+    const payload: any = {
+      model,
+      messages: [
+        { role: 'system', content: TEACHER_SYSTEM_PROMPT },
+        { role: 'user', content: userContent },
+      ],
+      temperature,
+      top_p: 0.88,
+      frequency_penalty: 0.5,
+      presence_penalty: 0.3,
+    };
 
     const resp = await fetchImpl(DEEPSEEK_API_URL, {
       method: 'POST',
@@ -206,18 +287,7 @@ export class AppService {
         Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Transform this text:\n${text}` },
-        ],
-        temperature,
-        top_p: 0.88,
-        max_tokens: 2000,
-        frequency_penalty: 0.5,
-        presence_penalty: 0.3,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!resp.ok) {
@@ -230,7 +300,6 @@ export class AppService {
     return {
       provider: 'deepseek',
       model,
-      language: lang,
       output: content,
     };
   }

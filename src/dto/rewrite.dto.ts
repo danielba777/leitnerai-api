@@ -4,17 +4,12 @@ export class RewriteDto {
   @IsString()
   text!: string;
 
-  /** 'de', 'en', ... – default: 'unknown' -> System erkennt Sprache */
-  @IsOptional()
-  @IsString()
-  language?: string;
-
-  /** optional: 'deepseek' (Default) | 'bedrock' (später) */
+  /** optional: 'deepseek' (Default) | 'bedrock' */
   @IsOptional()
   @IsIn(['deepseek', 'bedrock'])
   provider?: 'deepseek' | 'bedrock';
 
-  /** z. B. 'deepseek-chat' */
+  /** z. B. 'deepseek-chat' oder Bedrock-Model-ID */
   @IsOptional()
   @IsString()
   model?: string;

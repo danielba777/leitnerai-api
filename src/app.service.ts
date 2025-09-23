@@ -14,11 +14,6 @@ import {
   GetItemCommand,
 } from '@aws-sdk/client-dynamodb';
 import * as crypto from 'crypto';
-import {
-  BedrockRuntimeClient,
-  ConverseCommand,
-  ConverseCommandInput,
-} from '@aws-sdk/client-bedrock-runtime';
 
 const REGION = process.env.AWS_REGION || 'eu-north-1';
 const INBOX_BUCKET = process.env.INBOX_BUCKET || '';
@@ -26,17 +21,10 @@ const RESULTS_BUCKET = process.env.RESULTS_BUCKET || '';
 const QUEUE_URL = process.env.SQS_QUEUE_URL ?? process.env.QUEUE_URL ?? '';
 const TABLE_NAME = process.env.TABLE_NAME || '';
 const ASSET_URL_MODE = process.env.ASSET_URL_MODE || 'asset';
-const DEEPSEEK_API_URL =
-  process.env.DEEPSEEK_API_URL ||
-  'https://api.deepseek.com/v1/chat/completions';
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
-const REWRITE_PROVIDER = (
-  process.env.REWRITE_PROVIDER || 'deepseek'
-).toLowerCase();
-const BEDROCK_REGION =
-  process.env.BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
-const BEDROCK_MODEL_ID =
-  process.env.BEDROCK_MODEL_ID || 'anthropic.claude-3-haiku-20240307-v1:0';
+const OPENAI_API_URL =
+  process.env.OPENAI_API_URL || 'https://api.openai.com/v1/chat/completions';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5';
 
 function s3PublicUrl(bucket: string, region: string, key: string) {
   const escaped = key.split('/').map(encodeURIComponent).join('/');
@@ -99,6 +87,8 @@ Do this:
 • Make it feel like a teacher’s advice—think tips for surviving essays or cramming for science. Mention real stuff, like late-night study sessions or a messy backpack.
 • Change up paragraph sizes: one line here, a big chunk there. Throw in a question like “Ever bombed a test?” to sound human.
 • Don’t sound too perfect. Add a quirk, like admitting you’re bad at remembering names, to keep the tone personal and real.
+
+Output as a single paragraph (no line breaks). Do not use em dashes (—); use a normal hyphen (-) instead.
 `.trim();
 
 @Injectable()
@@ -106,7 +96,16 @@ export class AppService {
   private s3 = new S3Client({ region: REGION });
   private sqs = new SQSClient({ region: REGION });
   private db = new DynamoDBClient({ region: REGION });
-  private bedrock = new BedrockRuntimeClient({ region: BEDROCK_REGION });
+
+  // --- Normalisierung: keine Em-Dashes, keine Zeilenumbrüche, Whitespaces sauber ---
+  private normalizeOutput(raw: string): string {
+    if (!raw) return '';
+    return raw
+      .replace(/\u2014/g, '-')
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
 
   getHello(): string {
     return 'Hello World!';
@@ -192,84 +191,28 @@ export class AppService {
     return { jobId, language: lang };
   }
 
-  async rewrite(body: {
-    text: string;
-    provider?: string;
-    model?: string;
-    temperature?: number;
-  }) {
-    const provider = (body.provider || REWRITE_PROVIDER) as
-      | 'deepseek'
-      | 'bedrock';
-    const text = body.text.trim();
+  async rewrite(body: { text: string; model?: string; temperature?: number }) {
+    if (!OPENAI_API_KEY) {
+      throw new BadRequestException('OPENAI_API_KEY ist nicht gesetzt');
+    }
+
+    const text = (body.text || '').trim();
+    if (!text) {
+      throw new BadRequestException('text required');
+    }
+
     const userContent = [
       `Input Text:\n${text}`,
       'Task: Rewrite the text to sound like a teacher’s honest, unpolished advice for students. Make it professional but real, like it’s for a handout or blog post.',
       'If no text is given, write a short bit about why planning ahead helps with schoolwork, using the same rules.',
       'Output Format: Give the text as a rough, engaging piece for students, like a quick classroom note or study tip.',
     ].join('\n\n');
+
+    const model = body.model || OPENAI_MODEL;
     const temperature =
-      typeof body.temperature === 'number' ? body.temperature : 0.72;
-    const model = body.model || 'deepseek-chat';
+      typeof body.temperature === 'number' ? body.temperature : 0.6;
 
-    if (provider === 'bedrock') {
-      // --- Bedrock über das einheitliche Converse API ---
-      const modelId = body.model || BEDROCK_MODEL_ID;
-
-      const input: ConverseCommandInput = {
-        modelId,
-        system: [{ text: TEACHER_SYSTEM_PROMPT }],
-        messages: [
-          {
-            role: 'user',
-            content: [{ text: userContent }],
-          },
-        ],
-        inferenceConfig: {
-          temperature,
-          topP: 0.88,
-        },
-      };
-
-      try {
-        const resp = await this.bedrock.send(new ConverseCommand(input));
-        const content =
-          resp?.output?.message?.content
-            ?.map((c: any) => c?.text)
-            ?.filter(Boolean)
-            ?.join('\n') ?? '';
-
-        return {
-          provider: 'bedrock',
-          model: modelId,
-          output: content,
-        };
-      } catch (e: any) {
-        // typische Fehler: AccessDeniedException (IAM), Model not in region, Throttling
-        throw new BadRequestException(
-          `Bedrock error: ${e?.name || e?.code || 'Unknown'} - ${
-            e?.message || e
-          }`,
-        );
-      }
-    }
-
-    if (provider !== 'deepseek' && provider !== 'bedrock') {
-      throw new BadRequestException(`Unknown provider: ${provider}`);
-    }
-
-    if (!DEEPSEEK_API_KEY) {
-      throw new BadRequestException('DEEPSEEK_API_KEY ist nicht gesetzt');
-    }
-
-    const fetchImpl = (globalThis as any).fetch as
-      | ((input: any, init?: any) => Promise<any>)
-      | undefined;
-    if (typeof fetchImpl !== 'function') {
-      throw new Error('fetch ist in dieser Umgebung nicht verfügbar.');
-    }
-
-    const payload: any = {
+    const payload = {
       model,
       messages: [
         { role: 'system', content: TEACHER_SYSTEM_PROMPT },
@@ -281,10 +224,17 @@ export class AppService {
       presence_penalty: 0.3,
     };
 
-    const resp = await fetchImpl(DEEPSEEK_API_URL, {
+    const fetchImpl = (globalThis as any).fetch as
+      | ((input: any, init?: any) => Promise<any>)
+      | undefined;
+    if (typeof fetchImpl !== 'function') {
+      throw new Error('fetch ist in dieser Umgebung nicht verfügbar.');
+    }
+
+    const resp = await fetchImpl(OPENAI_API_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
@@ -292,15 +242,17 @@ export class AppService {
 
     if (!resp.ok) {
       const errTxt = await resp.text();
-      throw new BadRequestException(`DeepSeek error ${resp.status}: ${errTxt}`);
+      throw new BadRequestException(`OpenAI error ${resp.status}: ${errTxt}`);
     }
 
     const data = await resp.json();
-    const content = data?.choices?.[0]?.message?.content ?? '';
+    const raw = data?.choices?.[0]?.message?.content ?? '';
+    const output = this.normalizeOutput(raw);
+
     return {
-      provider: 'deepseek',
+      provider: 'openai',
       model,
-      output: content,
+      output,
     };
   }
 

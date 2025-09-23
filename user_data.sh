@@ -8,12 +8,10 @@ RESULTS_BUCKET="leitnerai-results-7634-8705-3303"
 TABLE_NAME="leitnerai-jobs"
 SQS_QUEUE_URL="https://sqs.eu-north-1.amazonaws.com/763487053303/leitnerai-jobs-queue"
 QUEUE_URL="$SQS_QUEUE_URL"
-DEEPSEEK_API_URL="https://api.deepseek.com/v1/chat/completions"
-REWRITE_PROVIDER="deepseek"
-SSM_PARAM_DEEPSEEK="/leitnerai/deepseek_api_key"
-BEDROCK_REGION="eu-north-1"
-BEDROCK_MODEL_ID="amazon.nova-pro-v1:0"
-REWRITE_PROVIDER="bedrock" 
+# --- OpenAI ---
+OPENAI_API_URL="https://api.openai.com/v1/chat/completions"
+OPENAI_MODEL="gpt-5"
+SSM_PARAM_OPENAI="/leitnerai/openai_api_key"  # falls du SSM nutzt
 
 {
   echo "AWS_REGION=${AWS_REGION}"
@@ -22,8 +20,8 @@ REWRITE_PROVIDER="bedrock"
   echo "TABLE_NAME=${TABLE_NAME}"
   echo "SQS_QUEUE_URL=${SQS_QUEUE_URL}"
   echo "QUEUE_URL=${QUEUE_URL}"
-  echo "DEEPSEEK_API_URL=${DEEPSEEK_API_URL}"
-  echo "REWRITE_PROVIDER=${REWRITE_PROVIDER}"
+  echo "OPENAI_API_URL=${OPENAI_API_URL}"
+  echo "OPENAI_MODEL=${OPENAI_MODEL}"
 } | tee -a /etc/environment
 
 apt-get update -y
@@ -67,15 +65,15 @@ module.exports = {
 }
 EOF
 
-DEEPSEEK_API_KEY="$(aws ssm get-parameter \
-  --name "${SSM_PARAM_DEEPSEEK}" \
+OPENAI_API_KEY="$(aws ssm get-parameter \
+  --name "${SSM_PARAM_OPENAI}" \
   --with-decryption \
   --query 'Parameter.Value' \
   --output text \
   --region "${AWS_REGION}" || true)"
 
-if [ -z "${DEEPSEEK_API_KEY}" ]; then
-  echo "WARN: DEEPSEEK_API_KEY leer (SSM/IAM prüfen). Server startet trotzdem."
+if [ -z "${OPENAI_API_KEY}" ]; then
+  echo "WARN: OPENAI_API_KEY leer (SSM/IAM prüfen). Server startet trotzdem."
 fi
 
 chown -R ubuntu:ubuntu "$APP_DIR"
@@ -87,12 +85,9 @@ sudo -u ubuntu env \
   TABLE_NAME="${TABLE_NAME}" \
   SQS_QUEUE_URL="${SQS_QUEUE_URL}" \
   QUEUE_URL="${QUEUE_URL}" \
-  DEEPSEEK_API_URL="${DEEPSEEK_API_URL}" \
-  REWRITE_PROVIDER="${REWRITE_PROVIDER}" \
-  DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}" \
-  BEDROCK_REGION="${BEDROCK_REGION}" \
-  BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID}" \
-  REWRITE_PROVIDER="${REWRITE_PROVIDER}" \
+  OPENAI_API_URL="${OPENAI_API_URL}" \
+  OPENAI_MODEL="${OPENAI_MODEL}" \
+  OPENAI_API_KEY="${OPENAI_API_KEY}" \
   pm2 start "$APP_DIR/ecosystem.config.js" --update-env
 
 sudo -u ubuntu pm2 save

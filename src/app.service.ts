@@ -216,24 +216,20 @@ export class AppService {
       input: [
         {
           role: 'system',
-          content: [{ type: 'text', text: TEACHER_SYSTEM_PROMPT }],
+          content: [{ type: 'input_text', text: TEACHER_SYSTEM_PROMPT }],
         },
         {
           role: 'user',
-          content: [{ type: 'text', text: userContent }],
+          content: [{ type: 'input_text', text: userContent }],
         },
       ],
     };
 
-    if (!isGpt5) {
-      const temperature =
-        typeof body.temperature === 'number' ? body.temperature : 0.6;
-      Object.assign(payload, {
-        temperature,
-        top_p: 0.88,
-        frequency_penalty: 0.5,
-        presence_penalty: 0.3,
-      });
+    if (
+      model.toLowerCase() !== 'gpt-5' &&
+      typeof body.temperature === 'number'
+    ) {
+      payload.temperature = body.temperature;
     }
 
     const fetchImpl = (globalThis as any).fetch as

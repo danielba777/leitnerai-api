@@ -22,7 +22,7 @@ const QUEUE_URL = process.env.SQS_QUEUE_URL ?? process.env.QUEUE_URL ?? '';
 const TABLE_NAME = process.env.TABLE_NAME || '';
 const ASSET_URL_MODE = process.env.ASSET_URL_MODE || 'asset';
 const OPENAI_API_URL =
-  process.env.OPENAI_API_URL || 'https://api.openai.com/v1/chat/completions';
+  process.env.OPENAI_API_URL || 'https://api.openai.com/v1/responses';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5';
 
@@ -208,21 +208,33 @@ export class AppService {
       'Output Format: Give the text as a rough, engaging piece for students, like a quick classroom note or study tip.',
     ].join('\n\n');
 
-    const model = body.model || OPENAI_MODEL;
-    const temperature =
-      typeof body.temperature === 'number' ? body.temperature : 0.6;
+    const model = (body.model || OPENAI_MODEL).trim();
+    const isGpt5 = /^gpt-5/i.test(model);
 
-    const payload = {
+    const payload: any = {
       model,
-      messages: [
-        { role: 'system', content: TEACHER_SYSTEM_PROMPT },
-        { role: 'user', content: userContent },
+      input: [
+        {
+          role: 'system',
+          content: [{ type: 'text', text: TEACHER_SYSTEM_PROMPT }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: userContent }],
+        },
       ],
-      temperature,
-      top_p: 0.88,
-      frequency_penalty: 0.5,
-      presence_penalty: 0.3,
     };
+
+    if (!isGpt5) {
+      const temperature =
+        typeof body.temperature === 'number' ? body.temperature : 0.6;
+      Object.assign(payload, {
+        temperature,
+        top_p: 0.88,
+        frequency_penalty: 0.5,
+        presence_penalty: 0.3,
+      });
+    }
 
     const fetchImpl = (globalThis as any).fetch as
       | ((input: any, init?: any) => Promise<any>)
@@ -246,7 +258,11 @@ export class AppService {
     }
 
     const data = await resp.json();
-    const raw = data?.choices?.[0]?.message?.content ?? '';
+    const raw =
+      data?.output_text ??
+      data?.response?.output_text ??
+      data?.choices?.[0]?.message?.content ??
+      '';
     const output = this.normalizeOutput(raw);
 
     return {

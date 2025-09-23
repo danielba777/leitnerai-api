@@ -107,6 +107,50 @@ export class AppService {
       .trim();
   }
 
+  private pickOutputText(data: any): string {
+    if (typeof data?.output_text === 'string' && data.output_text.trim()) {
+      return data.output_text;
+    }
+
+    if (
+      typeof data?.response?.output_text === 'string' &&
+      data.response.output_text.trim()
+    ) {
+      return data.response.output_text;
+    }
+
+    const outputs: any[] = [];
+    if (Array.isArray(data?.output)) {
+      outputs.push(...data.output);
+    }
+    if (Array.isArray(data?.response?.output)) {
+      outputs.push(...data.response.output);
+    }
+
+    const chunks: string[] = [];
+
+    for (const item of outputs) {
+      const content = Array.isArray(item?.content) ? item.content : [];
+      for (const c of content) {
+        if (c?.type === 'output_text' && typeof c?.text === 'string') {
+          chunks.push(c.text);
+        } else if (c?.type === 'text' && typeof c?.text === 'string') {
+          chunks.push(c.text);
+        }
+      }
+    }
+
+    if (chunks.length) {
+      return chunks.join('');
+    }
+
+    if (typeof data?.choices?.[0]?.message?.content === 'string') {
+      return data.choices[0].message.content;
+    }
+
+    return '';
+  }
+
   getHello(): string {
     return 'Hello World!';
   }
@@ -225,11 +269,15 @@ export class AppService {
       ],
     };
 
-    if (
-      model.toLowerCase() !== 'gpt-5' &&
-      typeof body.temperature === 'number'
-    ) {
-      payload.temperature = body.temperature;
+    if (!isGpt5) {
+      const temperature =
+        typeof body.temperature === 'number' ? body.temperature : 0.6;
+      Object.assign(payload, {
+        temperature,
+        top_p: 0.88,
+        frequency_penalty: 0.5,
+        presence_penalty: 0.3,
+      });
     }
 
     const fetchImpl = (globalThis as any).fetch as
@@ -254,11 +302,18 @@ export class AppService {
     }
 
     const data = await resp.json();
-    const raw =
-      data?.output_text ??
-      data?.response?.output_text ??
-      data?.choices?.[0]?.message?.content ??
-      '';
+    let raw = this.pickOutputText(data);
+
+    if (!raw) {
+      try {
+        console.warn(
+          'OpenAI empty output debug:',
+          JSON.stringify(data)?.slice(0, 2000),
+        );
+      } catch (err) {
+        console.warn('OpenAI empty output debug: <unserializable response>');
+      }
+    }
     const output = this.normalizeOutput(raw);
 
     return {

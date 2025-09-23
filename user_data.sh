@@ -12,7 +12,7 @@ DEEPSEEK_API_URL="https://api.deepseek.com/v1/chat/completions"
 REWRITE_PROVIDER="deepseek"
 SSM_PARAM_DEEPSEEK="/leitnerai/deepseek_api_key"
 BEDROCK_REGION="us-east-1"
-BEDROCK_MODEL_ID="anthropic.claude-3-haiku-20240307-v1:0"
+BEDROCK_MODEL_ID="amazon.nova-pro-v1:0"
 REWRITE_PROVIDER="bedrock" 
 
 {

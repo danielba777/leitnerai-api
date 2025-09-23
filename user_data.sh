@@ -11,7 +11,7 @@ QUEUE_URL="$SQS_QUEUE_URL"
 DEEPSEEK_API_URL="https://api.deepseek.com/v1/chat/completions"
 REWRITE_PROVIDER="deepseek"
 SSM_PARAM_DEEPSEEK="/leitnerai/deepseek_api_key"
-BEDROCK_REGION="us-east-1"
+BEDROCK_REGION="eu-north-1"
 BEDROCK_MODEL_ID="amazon.nova-pro-v1:0"
 REWRITE_PROVIDER="bedrock" 
 

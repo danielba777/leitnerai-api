@@ -21,4 +21,8 @@ export class TtsDto {
   @Min(0.5)
   @Max(1.5)
   speed?: number; // 0.5..1.5 (wird auf SSML prosody rate gemappt)
+
+  @IsOptional()
+  @IsString()
+  engine?: 'neural' | 'standard';
 }

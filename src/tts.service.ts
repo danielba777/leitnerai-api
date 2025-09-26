@@ -2,7 +2,13 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { PollyClient, SynthesizeSpeechCommand, VoiceId } from '@aws-sdk/client-polly';
 import { Readable } from 'stream';
 
+type PollyEngine = 'neural' | 'standard';
+
 const REGION = process.env.AWS_REGION || 'eu-north-1';
+const POLLY_REGION = process.env.POLLY_REGION || REGION;
+const POLLY_ENGINE_DEFAULT = ((process.env.POLLY_ENGINE_DEFAULT || 'neural').toLowerCase() === 'standard'
+  ? 'standard'
+  : 'neural') as PollyEngine;
 
 function xmlEscape(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
@@ -105,6 +111,18 @@ function mapVoice(personaOrPolly: string | undefined, lang: string): VoiceId {
   return fallback[l] || 'Matthew';
 }
 
+function isEngineNotSupportedError(e: any): boolean {
+  const name = String(e?.name || e?.Code || '').toLowerCase();
+  const msg = String(e?.message || e).toLowerCase();
+  return (
+    name === 'validationexception' ||
+    /engine/.test(msg) ||
+    /neural/.test(msg) ||
+    /not supported/.test(msg) ||
+    /region/.test(msg)
+  );
+}
+
 function toPollyFormat(fmt?: string) {
   const f = (fmt || 'mp3').toLowerCase();
   if (f === 'mp3') return { output: 'mp3' as const, mime: 'audio/mpeg', ext: 'mp3' };
@@ -116,7 +134,7 @@ function toPollyFormat(fmt?: string) {
 
 @Injectable()
 export class TtsService {
-  private polly = new PollyClient({ region: REGION });
+  private polly = new PollyClient({ region: POLLY_REGION });
 
   private buildSSML(text: string, speed?: number) {
     const s = clamp(typeof speed === 'number' ? speed : 1.0, 0.5, 1.5);
@@ -127,8 +145,10 @@ export class TtsService {
   /**
    * Liefert AudioStream + Metadaten für Streaming-Response
    */
-  async synthesizeStream(opts: { text: string; language?: string; voice?: string; format?: string; speed?: number }) {
+  async synthesizeStream(opts: { text: string; language?: string; voice?: string; format?: string; speed?: number; engine?: PollyEngine }) {
     const { text, language, voice, format, speed } = opts;
+    const requestedEngineInput = opts.engine ?? POLLY_ENGINE_DEFAULT;
+    const requestedEngine: PollyEngine = requestedEngineInput === 'standard' ? 'standard' : 'neural';
     if (!text || !text.trim()) throw new BadRequestException('Text required');
 
     const lang = normalizeLang(language);
@@ -145,18 +165,22 @@ export class TtsService {
     let res;
     try {
       res = await this.polly.send(
-        new SynthesizeSpeechCommand({ Engine: 'neural', ...cmdBase }),
+        new SynthesizeSpeechCommand({ Engine: requestedEngine, ...cmdBase }),
       );
     } catch (e: any) {
-      // Fallback: wenn neural nicht unterstützt wird, auf standard zurückfallen
-      const msg = String(e?.message || e);
-      const name = String(e?.name || e?.Code || '');
-      if (name.toLowerCase().includes('engine') || msg.toLowerCase().includes('neural')) {
-        res = await this.polly.send(
-          new SynthesizeSpeechCommand({ Engine: 'standard', ...cmdBase }),
+      if (requestedEngine === 'neural' && isEngineNotSupportedError(e)) {
+        console.warn(
+          `Polly neural engine not supported for voice ${voiceId} in ${POLLY_REGION}, falling back to standard.`,
         );
+        try {
+          res = await this.polly.send(
+            new SynthesizeSpeechCommand({ Engine: 'standard', ...cmdBase }),
+          );
+        } catch (e2: any) {
+          throw new BadRequestException(`Polly standard fallback failed: ${e2?.message || e2}`);
+        }
       } else {
-        throw e;
+        throw new BadRequestException(`Polly synthesize failed: ${e?.message || e}`);
       }
     }
 
@@ -173,7 +197,7 @@ export class TtsService {
   /**
    * Liefert Base64-JSON wie deine bisherige Supabase-Funktion.
    */
-  async synthesizeBase64(opts: { text: string; language?: string; voice?: string; format?: string; speed?: number }) {
+  async synthesizeBase64(opts: { text: string; language?: string; voice?: string; format?: string; speed?: number; engine?: PollyEngine }) {
     const t0 = Date.now();
     const r = await this.synthesizeStream(opts);
     const chunks: Buffer[] = [];

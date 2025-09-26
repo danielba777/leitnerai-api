@@ -11,6 +11,8 @@ QUEUE_URL="$SQS_QUEUE_URL"
 OPENAI_API_URL="https://api.openai.com/v1/responses"
 OPENAI_MODEL="gpt-5"
 SSM_PARAM_OPENAI="/leitnerai/openai_api_key"
+POLLY_REGION="eu-west-1"
+POLLY_ENGINE_DEFAULT="neural"
 
 {
   echo "AWS_REGION=${AWS_REGION}"
@@ -21,6 +23,8 @@ SSM_PARAM_OPENAI="/leitnerai/openai_api_key"
   echo "QUEUE_URL=${QUEUE_URL}"
   echo "OPENAI_API_URL=${OPENAI_API_URL}"
   echo "OPENAI_MODEL=${OPENAI_MODEL}"
+  echo "POLLY_REGION=${POLLY_REGION}"
+  echo "POLLY_ENGINE_DEFAULT=${POLLY_ENGINE_DEFAULT}"
 } | tee -a /etc/environment
 
 apt-get update -y
@@ -87,6 +91,8 @@ sudo -u ubuntu env \
   OPENAI_API_URL="${OPENAI_API_URL}" \
   OPENAI_MODEL="${OPENAI_MODEL}" \
   OPENAI_API_KEY="${OPENAI_API_KEY}" \
+  POLLY_REGION="${POLLY_REGION}" \
+  POLLY_ENGINE_DEFAULT="${POLLY_ENGINE_DEFAULT}" \
   pm2 start "$APP_DIR/ecosystem.config.js" --update-env
 
 sudo -u ubuntu pm2 save

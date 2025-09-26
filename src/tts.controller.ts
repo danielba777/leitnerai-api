@@ -15,11 +15,12 @@ export class TtsController {
     @Query('voice') voice?: string,
     @Query('format') format?: string,
     @Query('speed') speedStr?: string,
+    @Query('engine') engine?: 'neural' | 'standard',
   ) {
     if (!text || !text.trim()) throw new BadRequestException('text required');
     const speed = speedStr ? Number(speedStr) : undefined;
 
-    const r = await this.tts.synthesizeStream({ text, language, voice, format, speed });
+    const r = await this.tts.synthesizeStream({ text, language, voice, format, speed, engine });
 
     res.setHeader('Content-Type', r.contentType || 'audio/mpeg');
     res.setHeader('Cache-Control', 'no-store');
@@ -49,6 +50,7 @@ export class TtsController {
       voice: body.voice,
       format: body.format,
       speed: body.speed,
+      engine: body.engine,
     });
   }
 }

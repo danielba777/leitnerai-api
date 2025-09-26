@@ -2,6 +2,7 @@ import { BadRequestException, Controller, Get, Post, Query, Body, Res } from '@n
 import { Response } from 'express';
 import { TtsService } from './tts.service';
 import { TtsDto } from './dto/tts.dto';
+import { TtsDialogDto } from './dto/tts-dialog.dto';
 
 @Controller()
 export class TtsController {
@@ -52,5 +53,13 @@ export class TtsController {
       speed: body.speed,
       engine: body.engine,
     });
+  }
+
+  @Post('/tts/dialog')
+  async ttsDialog(@Body() body: TtsDialogDto) {
+    if (!body?.turns?.length) {
+      throw new BadRequestException('turns required');
+    }
+    return this.tts.synthesizeDialog(body);
   }
 }

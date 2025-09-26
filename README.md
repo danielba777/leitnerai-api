@@ -58,6 +58,21 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
+### POST /tts/dialog
+
+Synthesizes a multi-speaker dialog using AWS Polly.
+
+Body:
+- `turns[]`: array of { text, speaker?, voice?, language?, speed? }
+- `format`: "mp3" | "ogg" | "wav" (default "mp3")
+- `engine`: "neural" | "standard" (default env POLLY_ENGINE_DEFAULT or "neural")
+- `gapMs`: silence between turns (ms), default 150
+- `merge`: true (default) = returns single audio file; false = returns segments
+
+Responses:
+- `merge=true`: `{ merged: true, audio: 'data:<mime>;base64,...', mime, ext, inference_status }`
+- `merge=false`: `{ merged: false, segments: [dataUrls...], mime, ext, inference_status }`
+
 ## Support
 
 Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).

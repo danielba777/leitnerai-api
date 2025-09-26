@@ -1,6 +1,9 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PollyClient, SynthesizeSpeechCommand, VoiceId } from '@aws-sdk/client-polly';
 import { Readable } from 'stream';
+import { spawn } from 'child_process';
+
+import { TtsDialogDto } from './dto/tts-dialog.dto';
 
 type PollyEngine = 'neural' | 'standard';
 
@@ -220,6 +223,163 @@ export class TtsService {
       output_format: r.ext,
       mime: r.mime,
       request_id: cryptoRandomId(),
+      inference_status: {
+        status: 'succeeded',
+        runtime_ms: Date.now() - t0,
+        cost: null,
+      },
+    };
+  }
+
+  private async synthesizeOneToBuffer(opts: {
+    text: string;
+    language?: string;
+    voice?: string;
+    format?: string;
+    speed?: number;
+    engine?: PollyEngine;
+  }) {
+    const r = await this.synthesizeStream(opts);
+    const chunks: Buffer[] = [];
+
+    await new Promise<void>((resolve, reject) => {
+      r.audioStream
+        .on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)))
+        .on('end', () => resolve())
+        .on('error', (e) => reject(e));
+    });
+
+    return { buffer: Buffer.concat(chunks), mime: r.mime, ext: r.ext };
+  }
+
+  private async mergeWithFfmpeg(buffers: Buffer[], outFmt: 'mp3' | 'ogg' | 'wav', gapMs: number): Promise<Buffer> {
+    const ffmpegPath = require('ffmpeg-static');
+    if (!ffmpegPath) {
+      throw new BadRequestException('ffmpeg-static binary not found');
+    }
+    const fs = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ttsdlg-'));
+
+    try {
+      const inFiles: string[] = [];
+      for (let i = 0; i < buffers.length; i++) {
+        const f = path.join(tmpDir, `part_${i}.bin`);
+        await fs.writeFile(f, buffers[i]);
+        inFiles.push(f);
+      }
+
+      const listPath = path.join(tmpDir, 'list.txt');
+      const silencePath = path.join(tmpDir, 'silence.mp3');
+
+      if (gapMs > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const args = [
+            '-f',
+            'lavfi',
+            '-t',
+            String(gapMs / 1000),
+            '-i',
+            'anullsrc=r=22050:cl=mono',
+            '-c:a',
+            'libmp3lame',
+            '-b:a',
+            '128k',
+            silencePath,
+            '-y',
+          ];
+          const p = spawn(ffmpegPath, args);
+          p.on('error', reject);
+          p.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg silence failed ${code}`))));
+        });
+      }
+
+      const lines: string[] = [];
+      for (let i = 0; i < inFiles.length; i++) {
+        lines.push(`file '${inFiles[i]}'`);
+        if (gapMs > 0 && i < inFiles.length - 1) {
+          lines.push(`file '${silencePath}'`);
+        }
+      }
+      await fs.writeFile(listPath, lines.join('\n'));
+
+      const outPath = path.join(tmpDir, `out.${outFmt}`);
+      const codecArgs =
+        outFmt === 'ogg'
+          ? ['-c:a', 'libvorbis']
+          : outFmt === 'wav'
+          ? ['-c:a', 'pcm_s16le']
+          : ['-c:a', 'libmp3lame', '-b:a', '128k'];
+
+      await new Promise<void>((resolve, reject) => {
+        const args = ['-f', 'concat', '-safe', '0', '-i', listPath, ...codecArgs, outPath, '-y'];
+        const p = spawn(ffmpegPath, args);
+        p.on('error', reject);
+        p.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg concat failed ${code}`))));
+      });
+
+      return await fs.readFile(outPath);
+    } finally {
+      try {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+
+  async synthesizeDialog(body: TtsDialogDto) {
+    const t0 = Date.now();
+
+    const outFormat = (body.format || 'mp3') as 'mp3' | 'ogg' | 'wav';
+    const engineInput = body.engine ?? POLLY_ENGINE_DEFAULT;
+    const engine: PollyEngine = engineInput === 'standard' ? 'standard' : 'neural';
+    const gapMs = typeof body.gapMs === 'number' ? Math.max(0, Math.min(2000, body.gapMs)) : 150;
+    const merge = body.merge !== false;
+
+    const partsFormat: 'mp3' | 'ogg' | 'wav' = merge ? 'mp3' : outFormat;
+
+    const parts: { buffer: Buffer; mime: string; ext: string }[] = [];
+    for (const turn of body.turns) {
+      const one = await this.synthesizeOneToBuffer({
+        text: turn.text,
+        language: turn.language,
+        voice: turn.voice,
+        format: partsFormat,
+        speed: turn.speed,
+        engine,
+      });
+      parts.push(one);
+    }
+
+    if (!merge) {
+      const segments = parts.map((p) => `data:${p.mime};base64,${p.buffer.toString('base64')}`);
+      return {
+        merged: false,
+        segments,
+        mime: parts[0]?.mime || 'audio/mpeg',
+        ext: parts[0]?.ext || 'mp3',
+        inference_status: {
+          status: 'succeeded',
+          runtime_ms: Date.now() - t0,
+          cost: null,
+        },
+      };
+    }
+
+    const merged = await this.mergeWithFfmpeg(
+      parts.map((p) => p.buffer),
+      outFormat,
+      gapMs,
+    );
+    const mime = outFormat === 'ogg' ? 'audio/ogg' : outFormat === 'wav' ? 'audio/wav' : 'audio/mpeg';
+    const ext = outFormat === 'ogg' ? 'ogg' : outFormat === 'wav' ? 'wav' : 'mp3';
+
+    return {
+      merged: true,
+      audio: `data:${mime};base64,${merged.toString('base64')}`,
+      mime,
+      ext,
       inference_status: {
         status: 'succeeded',
         runtime_ms: Date.now() - t0,

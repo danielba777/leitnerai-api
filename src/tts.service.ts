@@ -12,9 +12,11 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import * as crypto from 'crypto';
-import ffmpegStatic from 'ffmpeg-static';
 import { Readable } from 'stream';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const ffmpegStatic = require('ffmpeg-static') as string | null;
 
 import { TtsDialogDto } from './dto/tts-dialog.dto';
 
@@ -180,6 +182,20 @@ function toPollyFormat(fmt?: string) {
   if (f === 'wav')
     return { output: 'pcm' as const, mime: 'audio/pcm', ext: 'pcm' };
   return { output: 'mp3' as const, mime: 'audio/mpeg', ext: 'mp3' };
+}
+
+function resolveFfmpegPath(): string | null {
+  if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
+  if (ffmpegStatic) return ffmpegStatic;
+
+  const candidates = ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', 'ffmpeg'];
+  for (const c of candidates) {
+    try {
+      const r = spawnSync(c, ['-version'], { stdio: 'ignore' });
+      if (r.status === 0) return c;
+    } catch {}
+  }
+  return null;
 }
 
 @Injectable()
@@ -392,9 +408,11 @@ export class TtsService {
     outFmt: 'mp3' | 'ogg' | 'wav',
     gapMs: number,
   ): Promise<Buffer> {
-    const ffmpegPath = ffmpegStatic;
+    const ffmpegPath = resolveFfmpegPath();
     if (!ffmpegPath) {
-      throw new BadRequestException('ffmpeg-static binary not found');
+      throw new BadRequestException(
+        'ffmpeg not found (set FFMPEG_PATH, install system ffmpeg, or add ffmpeg-static).',
+      );
     }
     const fs = await import('fs/promises');
     const os = await import('os');

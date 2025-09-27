@@ -13,6 +13,7 @@ OPENAI_MODEL="gpt-5"
 SSM_PARAM_OPENAI="/leitnerai/openai_api_key"
 POLLY_REGION="eu-west-1"
 POLLY_ENGINE_DEFAULT="neural"
+FFMPEG_BIN="/usr/bin/ffmpeg"
 
 {
   echo "AWS_REGION=${AWS_REGION}"
@@ -25,10 +26,11 @@ POLLY_ENGINE_DEFAULT="neural"
   echo "OPENAI_MODEL=${OPENAI_MODEL}"
   echo "POLLY_REGION=${POLLY_REGION}"
   echo "POLLY_ENGINE_DEFAULT=${POLLY_ENGINE_DEFAULT}"
+  echo "FFMPEG_BIN=${FFMPEG_BIN}"   # <— NEU
 } | tee -a /etc/environment
 
 apt-get update -y
-apt-get install -y git unzip curl ca-certificates
+apt-get install -y git unzip curl ca-certificates ffmpeg
 
 curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
 apt-get install -y nodejs
@@ -93,6 +95,7 @@ sudo -u ubuntu env \
   OPENAI_API_KEY="${OPENAI_API_KEY}" \
   POLLY_REGION="${POLLY_REGION}" \
   POLLY_ENGINE_DEFAULT="${POLLY_ENGINE_DEFAULT}" \
+  FFMPEG_BIN="${FFMPEG_BIN}" \ 
   pm2 start "$APP_DIR/ecosystem.config.js" --update-env
 
 sudo -u ubuntu pm2 save

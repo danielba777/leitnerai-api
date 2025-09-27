@@ -1,5 +1,18 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import { PollyClient, SynthesizeSpeechCommand, VoiceId } from '@aws-sdk/client-polly';
+import {
+  PollyClient,
+  SynthesizeSpeechCommand,
+  VoiceId,
+} from '@aws-sdk/client-polly';
+import {
+  S3Client,
+  HeadObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import * as crypto from 'crypto';
+import ffmpegStatic from 'ffmpeg-static';
 import { Readable } from 'stream';
 import { spawn } from 'child_process';
 
@@ -9,9 +22,12 @@ type PollyEngine = 'neural' | 'standard';
 
 const REGION = process.env.AWS_REGION || 'eu-north-1';
 const POLLY_REGION = process.env.POLLY_REGION || REGION;
-const POLLY_ENGINE_DEFAULT = ((process.env.POLLY_ENGINE_DEFAULT || 'neural').toLowerCase() === 'standard'
-  ? 'standard'
-  : 'neural') as PollyEngine;
+const POLLY_ENGINE_DEFAULT = (
+  (process.env.POLLY_ENGINE_DEFAULT || 'neural').toLowerCase() === 'standard'
+    ? 'standard'
+    : 'neural'
+) as PollyEngine;
+const RESULTS_BUCKET = process.env.RESULTS_BUCKET || '';
 
 function xmlEscape(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
@@ -82,19 +98,47 @@ function mapVoice(personaOrPolly: string | undefined, lang: string): VoiceId {
   const tables: Record<string, Record<string, string>> = {
     // hell/freundlich (Kind/Jugendlich)
     nova: {
-      de: 'Vicki', en: 'Ivy', es: 'Lucia', fr: 'Lea', ja: 'Mizuki', ko: 'Seoyeon', pt: 'Vitoria', ru: 'Tatyana',
+      de: 'Vicki',
+      en: 'Ivy',
+      es: 'Lucia',
+      fr: 'Lea',
+      ja: 'Mizuki',
+      ko: 'Seoyeon',
+      pt: 'Vitoria',
+      ru: 'Tatyana',
     },
     // klar/hell
     shimmer: {
-      de: 'Vicki', en: 'Joanna', es: 'Lucia', fr: 'Lea', ja: 'Mizuki', ko: 'Seoyeon', pt: 'Camila', ru: 'Tatyana',
+      de: 'Vicki',
+      en: 'Joanna',
+      es: 'Lucia',
+      fr: 'Lea',
+      ja: 'Mizuki',
+      ko: 'Seoyeon',
+      pt: 'Camila',
+      ru: 'Tatyana',
     },
     // neutral/männlich (Teen/Jugendlich)
     onyx: {
-      de: 'Hans', en: 'Matthew', es: 'Enrique', fr: 'Mathieu', ja: 'Takumi', ko: 'Seoyeon', pt: 'Ricardo', ru: 'Maxim',
+      de: 'Hans',
+      en: 'Matthew',
+      es: 'Enrique',
+      fr: 'Mathieu',
+      ja: 'Takumi',
+      ko: 'Seoyeon',
+      pt: 'Ricardo',
+      ru: 'Maxim',
     },
     // ruhig/ausgewogen (erwachsen männlich)
     echo: {
-      de: 'Hans', en: 'Brian', es: 'Enrique', fr: 'Mathieu', ja: 'Takumi', ko: 'Seoyeon', pt: 'Ricardo', ru: 'Maxim',
+      de: 'Hans',
+      en: 'Brian',
+      es: 'Enrique',
+      fr: 'Mathieu',
+      ja: 'Takumi',
+      ko: 'Seoyeon',
+      pt: 'Ricardo',
+      ru: 'Maxim',
     },
   };
 
@@ -128,30 +172,109 @@ function isEngineNotSupportedError(e: any): boolean {
 
 function toPollyFormat(fmt?: string) {
   const f = (fmt || 'mp3').toLowerCase();
-  if (f === 'mp3') return { output: 'mp3' as const, mime: 'audio/mpeg', ext: 'mp3' };
-  if (f === 'ogg') return { output: 'ogg_vorbis' as const, mime: 'audio/ogg', ext: 'ogg' };
+  if (f === 'mp3')
+    return { output: 'mp3' as const, mime: 'audio/mpeg', ext: 'mp3' };
+  if (f === 'ogg')
+    return { output: 'ogg_vorbis' as const, mime: 'audio/ogg', ext: 'ogg' };
   // PCM ist KEIN WAV – als audio/pcm und .pcm deklarieren
-  if (f === 'wav') return { output: 'pcm' as const, mime: 'audio/pcm', ext: 'pcm' };
+  if (f === 'wav')
+    return { output: 'pcm' as const, mime: 'audio/pcm', ext: 'pcm' };
   return { output: 'mp3' as const, mime: 'audio/mpeg', ext: 'mp3' };
 }
 
 @Injectable()
 export class TtsService {
   private polly = new PollyClient({ region: POLLY_REGION });
+  private s3 = new S3Client({ region: REGION });
+
+  private normalizeText(s: string) {
+    return s.replace(/\s+/g, ' ').trim();
+  }
+
+  private hashDialogKey(payload: any) {
+    return crypto
+      .createHash('sha256')
+      .update(JSON.stringify(payload))
+      .digest('hex')
+      .slice(0, 32);
+  }
+
+  private async headS3(key: string) {
+    try {
+      await this.s3.send(
+        new HeadObjectCommand({ Bucket: RESULTS_BUCKET, Key: key }),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async getS3Buffer(key: string) {
+    const r = await this.s3.send(
+      new GetObjectCommand({ Bucket: RESULTS_BUCKET, Key: key }),
+    );
+    const chunks: Buffer[] = [];
+    await new Promise<void>((resolve, reject) => {
+      (r.Body as Readable)
+        .on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)))
+        .on('end', () => resolve())
+        .on('error', reject);
+    });
+    return Buffer.concat(chunks);
+  }
+
+  private async putS3(key: string, buf: Buffer, contentType: string) {
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: RESULTS_BUCKET,
+        Key: key,
+        Body: buf,
+        ContentType: contentType,
+      }),
+    );
+  }
+
+  private async putS3Json(key: string, obj: any) {
+    const body = Buffer.from(JSON.stringify(obj));
+    await this.putS3(key, body, 'application/json');
+  }
+
+  private async signedGetUrl(key: string) {
+    try {
+      return await getSignedUrl(
+        this.s3,
+        new GetObjectCommand({ Bucket: RESULTS_BUCKET, Key: key }),
+        { expiresIn: 900 },
+      );
+    } catch {
+      return undefined;
+    }
+  }
 
   private buildSSML(text: string, speed?: number) {
     const s = clamp(typeof speed === 'number' ? speed : 1.0, 0.5, 1.5);
     const ratePct = Math.round(s * 100);
-    return `<speak><prosody rate="${ratePct}%">${xmlEscape(text.trim())}</prosody></speak>`;
+    return `<speak><prosody rate="${ratePct}%">${xmlEscape(
+      text.trim(),
+    )}</prosody></speak>`;
   }
 
   /**
    * Liefert AudioStream + Metadaten für Streaming-Response
    */
-  async synthesizeStream(opts: { text: string; language?: string; voice?: string; format?: string; speed?: number; engine?: PollyEngine }) {
+  async synthesizeStream(opts: {
+    text: string;
+    language?: string;
+    voice?: string;
+    format?: string;
+    speed?: number;
+    engine?: PollyEngine;
+  }) {
     const { text, language, voice, format, speed } = opts;
     const requestedEngineInput = opts.engine ?? POLLY_ENGINE_DEFAULT;
-    const requestedEngine: PollyEngine = requestedEngineInput === 'standard' ? 'standard' : 'neural';
+    const requestedEngine: PollyEngine =
+      requestedEngineInput === 'standard' ? 'standard' : 'neural';
     if (!text || !text.trim()) throw new BadRequestException('Text required');
 
     const lang = normalizeLang(language);
@@ -180,14 +303,19 @@ export class TtsService {
             new SynthesizeSpeechCommand({ Engine: 'standard', ...cmdBase }),
           );
         } catch (e2: any) {
-          throw new BadRequestException(`Polly standard fallback failed: ${e2?.message || e2}`);
+          throw new BadRequestException(
+            `Polly standard fallback failed: ${e2?.message || e2}`,
+          );
         }
       } else {
-        throw new BadRequestException(`Polly synthesize failed: ${e?.message || e}`);
+        throw new BadRequestException(
+          `Polly synthesize failed: ${e?.message || e}`,
+        );
       }
     }
 
-    if (!res.AudioStream) throw new BadRequestException('No audio stream from Polly');
+    if (!res.AudioStream)
+      throw new BadRequestException('No audio stream from Polly');
 
     return {
       audioStream: res.AudioStream as Readable,
@@ -200,7 +328,14 @@ export class TtsService {
   /**
    * Liefert Base64-JSON wie deine bisherige Supabase-Funktion.
    */
-  async synthesizeBase64(opts: { text: string; language?: string; voice?: string; format?: string; speed?: number; engine?: PollyEngine }) {
+  async synthesizeBase64(opts: {
+    text: string;
+    language?: string;
+    voice?: string;
+    format?: string;
+    speed?: number;
+    engine?: PollyEngine;
+  }) {
     const t0 = Date.now();
     const r = await this.synthesizeStream(opts);
     const chunks: Buffer[] = [];
@@ -252,8 +387,12 @@ export class TtsService {
     return { buffer: Buffer.concat(chunks), mime: r.mime, ext: r.ext };
   }
 
-  private async mergeWithFfmpeg(buffers: Buffer[], outFmt: 'mp3' | 'ogg' | 'wav', gapMs: number): Promise<Buffer> {
-    const ffmpegPath = require('ffmpeg-static');
+  private async mergeWithFfmpeg(
+    buffers: Buffer[],
+    outFmt: 'mp3' | 'ogg' | 'wav',
+    gapMs: number,
+  ): Promise<Buffer> {
+    const ffmpegPath = ffmpegStatic;
     if (!ffmpegPath) {
       throw new BadRequestException('ffmpeg-static binary not found');
     }
@@ -292,7 +431,11 @@ export class TtsService {
           ];
           const p = spawn(ffmpegPath, args);
           p.on('error', reject);
-          p.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg silence failed ${code}`))));
+          p.on('close', (code) =>
+            code === 0
+              ? resolve()
+              : reject(new Error(`ffmpeg silence failed ${code}`)),
+          );
         });
       }
 
@@ -314,10 +457,24 @@ export class TtsService {
           : ['-c:a', 'libmp3lame', '-b:a', '128k'];
 
       await new Promise<void>((resolve, reject) => {
-        const args = ['-f', 'concat', '-safe', '0', '-i', listPath, ...codecArgs, outPath, '-y'];
+        const args = [
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          listPath,
+          ...codecArgs,
+          outPath,
+          '-y',
+        ];
         const p = spawn(ffmpegPath, args);
         p.on('error', reject);
-        p.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg concat failed ${code}`))));
+        p.on('close', (code) =>
+          code === 0
+            ? resolve()
+            : reject(new Error(`ffmpeg concat failed ${code}`)),
+        );
       });
 
       return await fs.readFile(outPath);
@@ -333,11 +490,72 @@ export class TtsService {
 
     const outFormat = (body.format || 'mp3') as 'mp3' | 'ogg' | 'wav';
     const engineInput = body.engine ?? POLLY_ENGINE_DEFAULT;
-    const engine: PollyEngine = engineInput === 'standard' ? 'standard' : 'neural';
-    const gapMs = typeof body.gapMs === 'number' ? Math.max(0, Math.min(2000, body.gapMs)) : 150;
+    const engine: PollyEngine =
+      engineInput === 'standard' ? 'standard' : 'neural';
+    const gapMs =
+      typeof body.gapMs === 'number'
+        ? Math.max(0, Math.min(2000, body.gapMs))
+        : 150;
     const merge = body.merge !== false;
 
     const partsFormat: 'mp3' | 'ogg' | 'wav' = merge ? 'mp3' : outFormat;
+    let audioKey!: string;
+    let metaKey!: string;
+    const mime =
+      outFormat === 'ogg'
+        ? 'audio/ogg'
+        : outFormat === 'wav'
+        ? 'audio/wav'
+        : 'audio/mpeg';
+    const ext =
+      outFormat === 'ogg' ? 'ogg' : outFormat === 'wav' ? 'wav' : 'mp3';
+
+    if (merge) {
+      const normalizedTurns = body.turns.map((t) => {
+        const lang = normalizeLang(t.language);
+        const voiceId = mapVoice(t.voice, lang);
+        const speed = clamp(
+          typeof t.speed === 'number' ? t.speed : 1.0,
+          0.5,
+          1.5,
+        );
+        return {
+          text: this.normalizeText(t.text),
+          lang,
+          voiceId,
+          speed,
+        };
+      });
+
+      const keyForHash = {
+        type: 'tts-dialog',
+        version: 'v1',
+        region: POLLY_REGION,
+        format: outFormat,
+        gapMs,
+        engineRequested: engine,
+        turns: normalizedTurns,
+      };
+
+      const hash = this.hashDialogKey(keyForHash);
+      audioKey = `results/tts/dialog/v1/${hash}.${ext}`;
+      metaKey = `results/tts/dialog/v1/${hash}.json`;
+
+      if (await this.headS3(audioKey)) {
+        const buf = await this.getS3Buffer(audioKey);
+        const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+        const downloadUrl = await this.signedGetUrl(audioKey);
+        return {
+          merged: true,
+          audio: dataUrl,
+          mime,
+          ext,
+          s3Key: audioKey,
+          downloadUrl,
+          inference_status: { status: 'cached', runtime_ms: 0, cost: null },
+        };
+      }
+    }
 
     const parts: { buffer: Buffer; mime: string; ext: string }[] = [];
     for (const turn of body.turns) {
@@ -353,7 +571,9 @@ export class TtsService {
     }
 
     if (!merge) {
-      const segments = parts.map((p) => `data:${p.mime};base64,${p.buffer.toString('base64')}`);
+      const segments = parts.map(
+        (p) => `data:${p.mime};base64,${p.buffer.toString('base64')}`,
+      );
       return {
         merged: false,
         segments,
@@ -372,14 +592,29 @@ export class TtsService {
       outFormat,
       gapMs,
     );
-    const mime = outFormat === 'ogg' ? 'audio/ogg' : outFormat === 'wav' ? 'audio/wav' : 'audio/mpeg';
-    const ext = outFormat === 'ogg' ? 'ogg' : outFormat === 'wav' ? 'wav' : 'mp3';
+
+    await this.putS3(audioKey, merged, mime);
+    await this.putS3Json(metaKey, {
+      type: 'tts-dialog',
+      version: 'v1',
+      engineRequested: engine,
+      region: POLLY_REGION,
+      format: outFormat,
+      gapMs,
+      mime,
+      ext,
+      createdAt: Date.now(),
+    });
+
+    const downloadUrl = await this.signedGetUrl(audioKey);
 
     return {
       merged: true,
       audio: `data:${mime};base64,${merged.toString('base64')}`,
       mime,
       ext,
+      s3Key: audioKey,
+      downloadUrl,
       inference_status: {
         status: 'succeeded',
         runtime_ms: Date.now() - t0,

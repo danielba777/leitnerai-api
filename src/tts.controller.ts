@@ -1,4 +1,12 @@
-import { BadRequestException, Controller, Get, Post, Query, Body, Res } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Post,
+  Query,
+  Body,
+  Res,
+} from '@nestjs/common';
 import { Response } from 'express';
 import { TtsService } from './tts.service';
 import { TtsDto } from './dto/tts.dto';
@@ -21,7 +29,14 @@ export class TtsController {
     if (!text || !text.trim()) throw new BadRequestException('text required');
     const speed = speedStr ? Number(speedStr) : undefined;
 
-    const r = await this.tts.synthesizeStream({ text, language, voice, format, speed, engine });
+    const r = await this.tts.synthesizeStream({
+      text,
+      language,
+      voice,
+      format,
+      speed,
+      engine,
+    });
 
     res.setHeader('Content-Type', r.contentType || 'audio/mpeg');
     res.setHeader('Cache-Control', 'no-store');
@@ -44,7 +59,8 @@ export class TtsController {
 
   @Post('/tts')
   async ttsJson(@Body() body: TtsDto) {
-    if (!body?.text || !body.text.trim()) throw new BadRequestException('text required');
+    if (!body?.text || !body.text.trim())
+      throw new BadRequestException('text required');
     return this.tts.synthesizeBase64({
       text: body.text,
       language: body.language,

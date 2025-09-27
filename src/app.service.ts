@@ -302,7 +302,7 @@ export class AppService {
     }
 
     const data = await resp.json();
-    let raw = this.pickOutputText(data);
+    const raw = this.pickOutputText(data);
 
     if (!raw) {
       try {

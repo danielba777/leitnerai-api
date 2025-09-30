@@ -14,6 +14,9 @@ SSM_PARAM_OPENAI="/leitnerai/openai_api_key"
 POLLY_REGION="eu-west-1"
 POLLY_ENGINE_DEFAULT="neural"
 FFMPEG_PATH="/usr/bin/ffmpeg"
+BEDROCK_REGION="eu-north-1"
+BEDROCK_MODEL_ID=""
+BEDROCK_INFERENCE_PROFILE_ARN="arn:aws:bedrock:eu-north-1:763487053303:inference-profile/eu.anthropic.claude-sonnet-4-20250514-v1:0"
 
 {
   echo "AWS_REGION=${AWS_REGION}"
@@ -27,6 +30,9 @@ FFMPEG_PATH="/usr/bin/ffmpeg"
   echo "POLLY_REGION=${POLLY_REGION}"
   echo "POLLY_ENGINE_DEFAULT=${POLLY_ENGINE_DEFAULT}"
   echo "FFMPEG_PATH=${FFMPEG_PATH}"
+  echo "BEDROCK_REGION=${BEDROCK_REGION}"
+  echo "BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID}"
+  echo "BEDROCK_INFERENCE_PROFILE_ARN=${BEDROCK_INFERENCE_PROFILE_ARN}"
 } | tee -a /etc/environment
 
 apt-get update -y
@@ -100,6 +106,9 @@ sudo -u ubuntu env \
   POLLY_REGION="${POLLY_REGION}" \
   POLLY_ENGINE_DEFAULT="${POLLY_ENGINE_DEFAULT}" \
   FFMPEG_PATH="${FFMPEG_PATH}" \
+  BEDROCK_REGION="${BEDROCK_REGION}" \
+  BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID}" \
+  BEDROCK_INFERENCE_PROFILE_ARN="${BEDROCK_INFERENCE_PROFILE_ARN}" \
   pm2 start "$APP_DIR/ecosystem.config.js" --update-env
 
 sudo -u ubuntu pm2 save

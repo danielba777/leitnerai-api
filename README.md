@@ -73,6 +73,14 @@ Responses:
 - `merge=true`: `{ merged: true, audio: 'data:<mime>;base64,...', mime, ext, inference_status }`
 - `merge=false`: `{ merged: false, segments: [dataUrls...], mime, ext, inference_status }`
 
+### POST /rewrite
+
+- `/rewrite` nutzt AWS Bedrock (Anthropic Claude Sonnet 4 via Inference Profile).
+- Konfiguration per ENV:
+  - `BEDROCK_REGION` (z. B. `eu-north-1`)
+  - `BEDROCK_INFERENCE_PROFILE_ARN` (empfohlen)
+  - `BEDROCK_MODEL_ID` (Fallback ohne Profil)
+
 ## Support
 
 Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).

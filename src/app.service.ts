@@ -13,7 +13,12 @@ import {
   PutItemCommand,
   GetItemCommand,
 } from '@aws-sdk/client-dynamodb';
+import {
+  BedrockRuntimeClient,
+  InvokeModelCommand,
+} from '@aws-sdk/client-bedrock-runtime';
 import * as crypto from 'crypto';
+import { TextDecoder } from 'util';
 
 const REGION = process.env.AWS_REGION || 'eu-north-1';
 const INBOX_BUCKET = process.env.INBOX_BUCKET || '';
@@ -25,6 +30,11 @@ const OPENAI_API_URL =
   process.env.OPENAI_API_URL || 'https://api.openai.com/v1/responses';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5';
+const BEDROCK_REGION =
+  process.env.BEDROCK_REGION || process.env.AWS_REGION || 'eu-north-1';
+const BEDROCK_INFERENCE_PROFILE_ARN =
+  process.env.BEDROCK_INFERENCE_PROFILE_ARN || '';
+const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID || '';
 
 function s3PublicUrl(bucket: string, region: string, key: string) {
   const escaped = key.split('/').map(encodeURIComponent).join('/');
@@ -96,6 +106,8 @@ export class AppService {
   private s3 = new S3Client({ region: REGION });
   private sqs = new SQSClient({ region: REGION });
   private db = new DynamoDBClient({ region: REGION });
+  // Bedrock Runtime Client
+  private bedrock = new BedrockRuntimeClient({ region: BEDROCK_REGION });
 
   // --- Normalisierung: keine Em-Dashes, keine Zeilenumbrüche, Whitespaces sauber ---
   private normalizeOutput(raw: string): string {
@@ -149,6 +161,63 @@ export class AppService {
     }
 
     return '';
+  }
+
+  private async bedrockClaudeMessages(params: {
+    system: string;
+    user: string;
+    temperature?: number;
+    maxTokens?: number;
+  }) {
+    const { system, user } = params;
+    const temperature =
+      typeof params.temperature === 'number' ? params.temperature : 0.6;
+    const maxTokens =
+      typeof params.maxTokens === 'number' ? params.maxTokens : 1024;
+
+    if (!BEDROCK_INFERENCE_PROFILE_ARN && !BEDROCK_MODEL_ID) {
+      throw new BadRequestException(
+        'Bedrock not configured: set BEDROCK_INFERENCE_PROFILE_ARN or BEDROCK_MODEL_ID',
+      );
+    }
+
+    const body = {
+      anthropic_version: 'bedrock-2023-05-31',
+      system,
+      messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
+      temperature,
+      top_p: 0.9,
+      max_tokens: maxTokens,
+    };
+
+    const input: any = {
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify(body),
+    };
+
+    if (BEDROCK_INFERENCE_PROFILE_ARN) {
+      input.inferenceProfileArn = BEDROCK_INFERENCE_PROFILE_ARN;
+    } else {
+      input.modelId = BEDROCK_MODEL_ID;
+    }
+
+    const resp = await this.bedrock.send(new InvokeModelCommand(input));
+
+    const jsonStr =
+      typeof resp.body === 'string'
+        ? resp.body
+        : new TextDecoder('utf-8').decode(resp.body as Uint8Array);
+
+    const data = JSON.parse(jsonStr);
+
+    const pieces = Array.isArray(data?.content)
+      ? data.content
+          .map((c: any) => (typeof c?.text === 'string' ? c.text : ''))
+          .filter(Boolean)
+      : [];
+
+    return pieces.join('');
   }
 
   getHello(): string {
@@ -236,14 +305,12 @@ export class AppService {
   }
 
   async rewrite(body: { text: string; model?: string; temperature?: number }) {
-    if (!OPENAI_API_KEY) {
-      throw new BadRequestException('OPENAI_API_KEY ist nicht gesetzt');
-    }
-
     const text = (body.text || '').trim();
     if (!text) {
       throw new BadRequestException('text required');
     }
+
+    const systemPrompt = TEACHER_SYSTEM_PROMPT;
 
     const userContent = [
       `Input Text:\n${text}`,
@@ -252,73 +319,29 @@ export class AppService {
       'Output Format: Give the text as a rough, engaging piece for students, like a quick classroom note or study tip.',
     ].join('\n\n');
 
-    const model = (body.model || OPENAI_MODEL).trim();
-    const isGpt5 = /^gpt-5/i.test(model);
+    const temperature =
+      typeof body.temperature === 'number' ? body.temperature : 0.6;
 
-    const payload: any = {
-      model,
-      input: [
-        {
-          role: 'system',
-          content: [{ type: 'input_text', text: TEACHER_SYSTEM_PROMPT }],
-        },
-        {
-          role: 'user',
-          content: [{ type: 'input_text', text: userContent }],
-        },
-      ],
-    };
-
-    if (!isGpt5) {
-      const temperature =
-        typeof body.temperature === 'number' ? body.temperature : 0.6;
-      Object.assign(payload, {
+    let raw = '';
+    try {
+      raw = await this.bedrockClaudeMessages({
+        system: systemPrompt,
+        user: userContent,
         temperature,
-        top_p: 0.88,
-        frequency_penalty: 0.5,
-        presence_penalty: 0.3,
+        maxTokens: 2048,
       });
+    } catch (e: any) {
+      throw new BadRequestException(`Bedrock error: ${e?.message || e}`);
     }
 
-    const fetchImpl = (globalThis as any).fetch as
-      | ((input: any, init?: any) => Promise<any>)
-      | undefined;
-    if (typeof fetchImpl !== 'function') {
-      throw new Error('fetch ist in dieser Umgebung nicht verfügbar.');
-    }
-
-    const resp = await fetchImpl(OPENAI_API_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!resp.ok) {
-      const errTxt = await resp.text();
-      throw new BadRequestException(`OpenAI error ${resp.status}: ${errTxt}`);
-    }
-
-    const data = await resp.json();
-    const raw = this.pickOutputText(data);
-
-    if (!raw) {
-      try {
-        console.warn(
-          'OpenAI empty output debug:',
-          JSON.stringify(data)?.slice(0, 2000),
-        );
-      } catch (err) {
-        console.warn('OpenAI empty output debug: <unserializable response>');
-      }
-    }
     const output = this.normalizeOutput(raw);
 
+    const modelDescriptor =
+      BEDROCK_INFERENCE_PROFILE_ARN || BEDROCK_MODEL_ID || 'bedrock:anthropic:sonnet-4';
+
     return {
-      provider: 'openai',
-      model,
+      provider: 'bedrock',
+      model: modelDescriptor,
       output,
     };
   }

@@ -101,6 +101,39 @@ Do this:
 Output as a single paragraph (no line breaks). Do not use em dashes (—); use a normal hyphen (-) instead.
 `.trim();
 
+const PROMPT_LAYER_1_TEMPLATE = `Prompt 1: The Deconstruction Prompt (Layer 1)
+Act as a forensic editor and conceptual deconstructor. Your task is to analyze the following raw, AI-generated text and produce a structured outline of its core logic ONLY. DO NOT paraphrase or rewrite the text. Your output must ONLY be the logical framework.
+Follow these steps exactly:
+1. Identify the central **Thesis Statement (THESIS)**.
+2. Extract all **Key Supporting Points (KEY POINTS)**, listing them with single-sentence clarity.
+3. Identify the three most powerful **Analogies or Examples (EXAMPLES)** used to support the points. If none exist, state 'None found, abstract logic used.'
+4. State the original text's overall **Tone (ORIGINAL TONE)** (e.g., 'Objective, slightly robotic').
+5. State the original text's estimated reading **Complexity (COMPLEXITY)** (e.g., 'High School Level').
+Format your response strictly as a bulleted list with bold, allcaps headings for each section.
+Raw AI Text to Deconstruct:
+[INSERT USER'S RAW AI TEXT HERE]`;
+
+const PROMPT_LAYER_2_TEMPLATE = `Prompt 2: The Metaphorical Rebuilding Prompt (Layer 2)
+Act as a visionary writer specializing in philosophical and metaphorical narrative. Your task is to completely rebuild the following structured logical outline into a long, engaging, and highly descriptive essay. Your essay must be **at least 500 words** and must not contain any of the original wording from the source text.
+Follow these core principles:
+1. **Focus on Metaphor:** Translate the Thesis and Key Points into a continuous, **complex metaphor** or an extended, vivid analogy.
+2. **Increase Burstiness and Perplexity:** Use a radically varied sentence structure. Employ sophisticated, rare, and context-specific vocabulary.
+3. **Avoid Synthesis:** Do not conclude or summarize the argument.
+Structured Logical Outline to Rebuild:
+[INSERT THE *EXACT* OUTPUT FROM PROMPT 1 HERE]`;
+
+const PROMPT_LAYER_3_TEMPLATE = `Prompt 3: The Academic Synthesis Prompt (Layer 3)
+Act as a seasoned, final-pass editorial synthesizer. Your sole goal is to transform the following highly conceptual and metaphorical essay into a finished, polished, and context-appropriate piece of text.
+Persona & Tone Directive:
+**[PERSONA]:** A slightly skeptical but highly knowledgeable independent analyst with a PhD in Computational Linguistics.
+**[TONE]:** Conversational, engaging, and subtly opinionated (using phrases like 'one might argue that,' and appropriate contractions).
+Follow these steps:
+1. **Synthesize and Ground:** Extract the actual logical meaning behind the metaphors, translating the high-level concepts into clear, professional, yet informal prose.
+2. **Inject Human Flaws:** Introduce minor stylistic 'imperfections,' such as starting one or two sentences with 'And' or 'But.'
+3. **Format:** Output the final text as a single, coherent, and well-flowing article ready for publication.
+Metaphorical Essay to Synthesize:
+[INSERT THE *EXACT* OUTPUT FROM PROMPT 2 HERE]`;
+
 @Injectable()
 export class AppService {
   private s3 = new S3Client({ region: REGION });
@@ -317,31 +350,61 @@ export class AppService {
       throw new BadRequestException('text required');
     }
 
-    const systemPrompt = TEACHER_SYSTEM_PROMPT;
-
-    const userContent = [
-      `Input Text:\n${text}`,
-      'Task: Rewrite the text to sound like a teacher’s honest, unpolished advice for students. Make it professional but real, like it’s for a handout or blog post.',
-      'If no text is given, write a short bit about why planning ahead helps with schoolwork, using the same rules.',
-      'Output Format: Give the text as a rough, engaging piece for students, like a quick classroom note or study tip.',
-    ].join('\n\n');
-
     const temperature =
       typeof body.temperature === 'number' ? body.temperature : 0.6;
 
-    let raw = '';
+    const layer1User = PROMPT_LAYER_1_TEMPLATE.replace(
+      "[INSERT USER'S RAW AI TEXT HERE]",
+      text,
+    );
+
+    let layer1Raw = '';
     try {
-      raw = await this.bedrockClaudeMessages({
-        system: systemPrompt,
-        user: userContent,
+      layer1Raw = await this.bedrockClaudeMessages({
+        system: '',
+        user: layer1User,
+        temperature,
+        maxTokens: 1024,
+      });
+    } catch (e: any) {
+      throw new BadRequestException(`Bedrock error (layer 1): ${e?.message || e}`);
+    }
+
+    const layer2User = PROMPT_LAYER_2_TEMPLATE.replace(
+      '[INSERT THE *EXACT* OUTPUT FROM PROMPT 1 HERE]',
+      layer1Raw,
+    );
+
+    let layer2Raw = '';
+    try {
+      layer2Raw = await this.bedrockClaudeMessages({
+        system: '',
+        user: layer2User,
+        temperature,
+        maxTokens: 4096,
+      });
+    } catch (e: any) {
+      throw new BadRequestException(`Bedrock error (layer 2): ${e?.message || e}`);
+    }
+
+    const layer3User = PROMPT_LAYER_3_TEMPLATE.replace(
+      '[INSERT THE *EXACT* OUTPUT FROM PROMPT 2 HERE]',
+      layer2Raw,
+    );
+
+    let layer3Raw = '';
+    try {
+      layer3Raw = await this.bedrockClaudeMessages({
+        system: '',
+        user: layer3User,
         temperature,
         maxTokens: 2048,
       });
     } catch (e: any) {
-      throw new BadRequestException(`Bedrock error: ${e?.message || e}`);
+      throw new BadRequestException(`Bedrock error (layer 3): ${e?.message || e}`);
     }
 
-    const output = this.normalizeOutput(raw);
+    const output = this.normalizeOutput(layer3Raw);
 
     const modelDescriptor =
       BEDROCK_INFERENCE_PROFILE_ARN || BEDROCK_MODEL_ID || 'bedrock:anthropic:sonnet-4';

@@ -75,7 +75,7 @@ Responses:
 
 ### POST /rewrite
 
-- `/rewrite` nutzt AWS Bedrock (Anthropic Claude Sonnet 4 via Inference Profile).
+- `/rewrite` nutzt AWS Bedrock (Anthropic Claude Sonnet 4 via Inference Profile) mit einer dreistufigen Prompt-Kette (Deconstruction → Metaphorical Rebuild → Academic Synthesis).
 - Konfiguration per ENV:
   - `BEDROCK_REGION` (z. B. `eu-north-1`)
   - `BEDROCK_INFERENCE_PROFILE_ARN` (empfohlen)

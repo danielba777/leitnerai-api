@@ -190,19 +190,26 @@ export class AppService {
       max_tokens: maxTokens,
     };
 
-    const input: any = {
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: JSON.stringify(body),
-    };
+    const modelIdForCall =
+      BEDROCK_INFERENCE_PROFILE_ARN &&
+      BEDROCK_INFERENCE_PROFILE_ARN.trim().length > 0
+        ? BEDROCK_INFERENCE_PROFILE_ARN
+        : BEDROCK_MODEL_ID;
 
-    if (BEDROCK_INFERENCE_PROFILE_ARN) {
-      input.inferenceProfileArn = BEDROCK_INFERENCE_PROFILE_ARN;
-    } else {
-      input.modelId = BEDROCK_MODEL_ID;
+    if (!modelIdForCall) {
+      throw new BadRequestException(
+        'Bedrock not configured: set BEDROCK_INFERENCE_PROFILE_ARN or BEDROCK_MODEL_ID',
+      );
     }
 
-    const resp = await this.bedrock.send(new InvokeModelCommand(input));
+    const resp = await this.bedrock.send(
+      new InvokeModelCommand({
+        modelId: modelIdForCall,
+        contentType: 'application/json',
+        accept: 'application/json',
+        body: JSON.stringify(body),
+      }),
+    );
 
     const jsonStr =
       typeof resp.body === 'string'

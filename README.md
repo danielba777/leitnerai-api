@@ -80,6 +80,7 @@ Responses:
   - `BEDROCK_REGION` (z. B. `eu-north-1`)
   - `BEDROCK_INFERENCE_PROFILE_ARN` (empfohlen)
   - `BEDROCK_MODEL_ID` (Fallback ohne Profil)
+- Wenn `BEDROCK_INFERENCE_PROFILE_ARN` gesetzt ist, wird dieses ARN als `modelId` an `InvokeModel` übergeben (Cross-Region Inference); andernfalls nutzt `/rewrite` `BEDROCK_MODEL_ID`.
 
 ## Support
 

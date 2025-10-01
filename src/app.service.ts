@@ -200,13 +200,13 @@ export class AppService {
     system: string;
     user: string;
     temperature?: number;
-    maxTokens?: number;
+    topP?: number;
   }) {
     const { system, user } = params;
     const temperature =
-      typeof params.temperature === 'number' ? params.temperature : 0.6;
-    const maxTokens =
-      typeof params.maxTokens === 'number' ? params.maxTokens : 1024;
+      typeof params.temperature === 'number' ? params.temperature : 0.85;
+    const topP =
+      typeof params.topP === 'number' ? params.topP : 0.9;
 
     if (!BEDROCK_INFERENCE_PROFILE_ARN && !BEDROCK_MODEL_ID) {
       throw new BadRequestException(
@@ -219,8 +219,7 @@ export class AppService {
       system,
       messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
       temperature,
-      top_p: 0.9,
-      max_tokens: maxTokens,
+      top_p: topP,
     };
 
     const modelIdForCall =
@@ -350,8 +349,7 @@ export class AppService {
       throw new BadRequestException('text required');
     }
 
-    const temperature =
-      typeof body.temperature === 'number' ? body.temperature : 0.6;
+    // temperature und top_p werden pro Aufruf explizit gesetzt (0.85 / 0.9)
 
     const layer1User = PROMPT_LAYER_1_TEMPLATE.replace(
       "[INSERT USER'S RAW AI TEXT HERE]",
@@ -363,8 +361,8 @@ export class AppService {
       layer1Raw = await this.bedrockClaudeMessages({
         system: '',
         user: layer1User,
-        temperature,
-        maxTokens: 1024,
+        temperature: 0.85,
+        topP: 0.9,
       });
     } catch (e: any) {
       throw new BadRequestException(`Bedrock error (layer 1): ${e?.message || e}`);
@@ -380,8 +378,8 @@ export class AppService {
       layer2Raw = await this.bedrockClaudeMessages({
         system: '',
         user: layer2User,
-        temperature,
-        maxTokens: 4096,
+        temperature: 0.85,
+        topP: 0.9,
       });
     } catch (e: any) {
       throw new BadRequestException(`Bedrock error (layer 2): ${e?.message || e}`);
@@ -397,8 +395,8 @@ export class AppService {
       layer3Raw = await this.bedrockClaudeMessages({
         system: '',
         user: layer3User,
-        temperature,
-        maxTokens: 2048,
+        temperature: 0.85,
+        topP: 0.9,
       });
     } catch (e: any) {
       throw new BadRequestException(`Bedrock error (layer 3): ${e?.message || e}`);
@@ -407,7 +405,9 @@ export class AppService {
     const output = this.normalizeOutput(layer3Raw);
 
     const modelDescriptor =
-      BEDROCK_INFERENCE_PROFILE_ARN || BEDROCK_MODEL_ID || 'bedrock:anthropic:sonnet-4';
+      +BEDROCK_INFERENCE_PROFILE_ARN ||
+      BEDROCK_MODEL_ID ||
+      'bedrock:anthropic:claude-3-sonnet';
 
     return {
       provider: 'bedrock',

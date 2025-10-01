@@ -14,9 +14,9 @@ SSM_PARAM_OPENAI="/leitnerai/openai_api_key"
 POLLY_REGION="eu-west-1"
 POLLY_ENGINE_DEFAULT="neural"
 FFMPEG_PATH="/usr/bin/ffmpeg"
-BEDROCK_REGION="eu-north-1"
-BEDROCK_MODEL_ID=""
-BEDROCK_INFERENCE_PROFILE_ARN="arn:aws:bedrock:eu-north-1:763487053303:inference-profile/eu.anthropic.claude-sonnet-4-20250514-v1:0"
+BEDROCK_REGION="eu-central-1"
+BEDROCK_MODEL_ID="anthropic.claude-3-sonnet-20240229-v1:0"
+BEDROCK_INFERENCE_PROFILE_ARN=""
 
 {
   echo "AWS_REGION=${AWS_REGION}"

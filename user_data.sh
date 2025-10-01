@@ -14,7 +14,7 @@ SSM_PARAM_OPENAI="/leitnerai/openai_api_key"
 POLLY_REGION="eu-west-1"
 POLLY_ENGINE_DEFAULT="neural"
 FFMPEG_PATH="/usr/bin/ffmpeg"
-BEDROCK_REGION="eu-central-1"
+BEDROCK_REGION="eu-west-1"
 BEDROCK_MODEL_ID="anthropic.claude-3-sonnet-20240229-v1:0"
 BEDROCK_INFERENCE_PROFILE_ARN=""
 

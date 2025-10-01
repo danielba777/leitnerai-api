@@ -134,6 +134,37 @@ Follow these steps:
 Metaphorical Essay to Synthesize:
 [INSERT THE *EXACT* OUTPUT FROM PROMPT 2 HERE]`;
 
+// ≈ Token-Schätzer und Budget-Rechner für Claude 3 Sonnet (Bedrock)
+const CLAUDE3_SONNET_CONTEXT = 200_000; // Kontextfenster (Eingabe + Ausgabe)
+const OUTPUT_HARD_CEILING = 12_000; // sehr großzügige Obergrenze für Ausgabe
+const SAFETY_MARGIN = 2_000; // Puffer ggü. dem Kontextfenster
+const MIN_OUTPUT_TOKENS = 512; // sinnvolle Untergrenze
+
+// grobe Token-Schätzung: ~4 Zeichen ≈ 1 Token (robust, schnell, ausreichend genau)
+function approxTokens(s?: string) {
+  return Math.max(0, Math.ceil((s?.length ?? 0) / 4));
+}
+
+// Overhead-Puffer für Role/Message-Struktur usw.
+function promptTokens(system: string, user: string) {
+  const overhead = 64;
+  return approxTokens(system) + approxTokens(user) + overhead;
+}
+
+/**
+ * Ermittelt ein sehr hohes, aber sicheres max_tokens Budget:
+ * - nutzt verbleibendes Kontextbudget (Kontextfenster - Prompt - Sicherheitsmarge)
+ * - deckelt mit großem "Hard Ceiling", damit keine ausufernden Antworten/Kosten entstehen
+ * - garantiert eine Untergrenze (z. B. 512 Tokens)
+ */
+function computeMaxTokens(system: string, user: string) {
+  const used = promptTokens(system, user);
+  const remaining = Math.max(0, CLAUDE3_SONNET_CONTEXT - SAFETY_MARGIN - used);
+  // Ergebnis ist "praktisch unlimitiert" für eure Texte (<= 2000 Wörter),
+  // gleichzeitig vor Ausreißern geschützt.
+  return Math.max(MIN_OUTPUT_TOKENS, Math.min(OUTPUT_HARD_CEILING, remaining));
+}
+
 @Injectable()
 export class AppService {
   private s3 = new S3Client({ region: REGION });
@@ -200,13 +231,13 @@ export class AppService {
     system: string;
     user: string;
     temperature?: number;
+    maxTokens?: number;
     topP?: number;
   }) {
     const { system, user } = params;
     const temperature =
-      typeof params.temperature === 'number' ? params.temperature : 0.85;
-    const topP =
-      typeof params.topP === 'number' ? params.topP : 0.9;
+      typeof params.temperature === 'number' ? params.temperature : 0.85; // default wie gewünscht
+    const top_p = typeof params.topP === 'number' ? params.topP : 0.9; // default wie gewünscht
 
     if (!BEDROCK_INFERENCE_PROFILE_ARN && !BEDROCK_MODEL_ID) {
       throw new BadRequestException(
@@ -214,13 +245,19 @@ export class AppService {
       );
     }
 
-    const body = {
+    const max_tokens =
+      typeof params.maxTokens === 'number' && params.maxTokens > 0
+        ? Math.floor(params.maxTokens)
+        : computeMaxTokens(system || '', user || '');
+
+    const body: any = {
       anthropic_version: 'bedrock-2023-05-31',
-      system,
       messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
       temperature,
-      top_p: topP,
+      top_p,
+      max_tokens,
     };
+    if (system && system.trim()) body.system = system;
 
     const modelIdForCall =
       BEDROCK_INFERENCE_PROFILE_ARN &&
@@ -362,10 +399,11 @@ export class AppService {
         system: '',
         user: layer1User,
         temperature: 0.85,
-        topP: 0.9,
       });
     } catch (e: any) {
-      throw new BadRequestException(`Bedrock error (layer 1): ${e?.message || e}`);
+      throw new BadRequestException(
+        `Bedrock error (layer 1): ${e?.message || e}`,
+      );
     }
 
     const layer2User = PROMPT_LAYER_2_TEMPLATE.replace(
@@ -379,10 +417,11 @@ export class AppService {
         system: '',
         user: layer2User,
         temperature: 0.85,
-        topP: 0.9,
       });
     } catch (e: any) {
-      throw new BadRequestException(`Bedrock error (layer 2): ${e?.message || e}`);
+      throw new BadRequestException(
+        `Bedrock error (layer 2): ${e?.message || e}`,
+      );
     }
 
     const layer3User = PROMPT_LAYER_3_TEMPLATE.replace(
@@ -396,18 +435,19 @@ export class AppService {
         system: '',
         user: layer3User,
         temperature: 0.85,
-        topP: 0.9,
       });
     } catch (e: any) {
-      throw new BadRequestException(`Bedrock error (layer 3): ${e?.message || e}`);
+      throw new BadRequestException(
+        `Bedrock error (layer 3): ${e?.message || e}`,
+      );
     }
 
     const output = this.normalizeOutput(layer3Raw);
 
     const modelDescriptor =
-      +BEDROCK_INFERENCE_PROFILE_ARN ||
+      BEDROCK_INFERENCE_PROFILE_ARN ||
       BEDROCK_MODEL_ID ||
-      'bedrock:anthropic:claude-3-sonnet';
+      'anthropic.claude-3-sonnet-20240229-v1:0';
 
     return {
       provider: 'bedrock',

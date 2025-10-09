@@ -13,12 +13,7 @@ import {
   PutItemCommand,
   GetItemCommand,
 } from '@aws-sdk/client-dynamodb';
-import {
-  BedrockRuntimeClient,
-  InvokeModelCommand,
-} from '@aws-sdk/client-bedrock-runtime';
 import * as crypto from 'crypto';
-import { TextDecoder } from 'util';
 
 const REGION = process.env.AWS_REGION || 'eu-north-1';
 const INBOX_BUCKET = process.env.INBOX_BUCKET || '';
@@ -26,15 +21,6 @@ const RESULTS_BUCKET = process.env.RESULTS_BUCKET || '';
 const QUEUE_URL = process.env.SQS_QUEUE_URL ?? process.env.QUEUE_URL ?? '';
 const TABLE_NAME = process.env.TABLE_NAME || '';
 const ASSET_URL_MODE = process.env.ASSET_URL_MODE || 'asset';
-const OPENAI_API_URL =
-  process.env.OPENAI_API_URL || 'https://api.openai.com/v1/responses';
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5';
-const BEDROCK_REGION =
-  process.env.BEDROCK_REGION || process.env.AWS_REGION || 'eu-north-1';
-const BEDROCK_INFERENCE_PROFILE_ARN =
-  process.env.BEDROCK_INFERENCE_PROFILE_ARN || '';
-const BEDROCK_MODEL_ID = process.env.BEDROCK_MODEL_ID || '';
 
 function s3PublicUrl(bucket: string, region: string, key: string) {
   const escaped = key.split('/').map(encodeURIComponent).join('/');
@@ -85,217 +71,14 @@ function normalizeLanguage(lang?: string) {
   return LANG_MAP[key] ?? lang;
 }
 
-const TEACHER_SYSTEM_PROMPT = `
-You’re a college teacher expert with a knack for writing gritty, heartfelt handouts that students actually read.
-Rewrite the provided text so it feels like it came straight from your pen—raw, real, and human.
-Make it professional but warm, like you’re talking to your students (18–20 years old) about something that’ll help them in school.
-
-Do this:
-• Write like you’re scribbling notes before class: short sentences, then a long ramble. Toss in a random thought, like “I saw this go wrong in my algebra class.”
-• Drop in a quick story about a student or a school moment, like forgetting a deadline or nailing a tough quiz. Make it specific but messy, not polished.
-• Skip fancy words or smooth transitions. Say “Look,” “Trust me,” or “Here’s the kicker” instead of “therefore” or “additionally.”
-• Make it feel like a teacher’s advice—think tips for surviving essays or cramming for science. Mention real stuff, like late-night study sessions or a messy backpack.
-• Change up paragraph sizes: one line here, a big chunk there. Throw in a question like “Ever bombed a test?” to sound human.
-• Don’t sound too perfect. Add a quirk, like admitting you’re bad at remembering names, to keep the tone personal and real.
-
-Output as a single paragraph (no line breaks). Do not use em dashes (—); use a normal hyphen (-) instead.
-`.trim();
-
-const PROMPT_LAYER_1_TEMPLATE = `Prompt 1: The Deconstruction Prompt (Layer 1)
-Act as a forensic editor and conceptual deconstructor. Your task is to analyze the following raw, AI-generated text and produce a structured outline of its core logic ONLY. DO NOT paraphrase or rewrite the text. Your output must ONLY be the logical framework.
-Follow these steps exactly:
-1. Identify the central **Thesis Statement (THESIS)**.
-2. Extract all **Key Supporting Points (KEY POINTS)**, listing them with single-sentence clarity.
-3. Identify the three most powerful **Analogies or Examples (EXAMPLES)** used to support the points. If none exist, state 'None found, abstract logic used.'
-4. State the original text's overall **Tone (ORIGINAL TONE)** (e.g., 'Objective, slightly robotic').
-5. State the original text's estimated reading **Complexity (COMPLEXITY)** (e.g., 'High School Level').
-Format your response strictly as a bulleted list with bold, allcaps headings for each section.
-Raw AI Text to Deconstruct:
-[INSERT USER'S RAW AI TEXT HERE]`;
-
-const PROMPT_LAYER_2_TEMPLATE = `Prompt 2: The Metaphorical Rebuilding Prompt (Layer 2)
-Act as a visionary writer specializing in philosophical and metaphorical narrative. Your task is to completely rebuild the following structured logical outline into a long, engaging, and highly descriptive essay. Your essay must be **at least 500 words** and must not contain any of the original wording from the source text.
-Follow these core principles:
-1. **Focus on Metaphor:** Translate the Thesis and Key Points into a continuous, **complex metaphor** or an extended, vivid analogy.
-2. **Increase Burstiness and Perplexity:** Use a radically varied sentence structure. Employ sophisticated, rare, and context-specific vocabulary.
-3. **Avoid Synthesis:** Do not conclude or summarize the argument.
-Structured Logical Outline to Rebuild:
-[INSERT THE *EXACT* OUTPUT FROM PROMPT 1 HERE]`;
-
-const PROMPT_LAYER_3_TEMPLATE = `Prompt 3: The Academic Synthesis Prompt (Layer 3)
-Act as a seasoned, final-pass editorial synthesizer. Your sole goal is to transform the following highly conceptual and metaphorical essay into a finished, polished, and context-appropriate piece of text.
-Persona & Tone Directive:
-**[PERSONA]:** A slightly skeptical but highly knowledgeable independent analyst with a PhD in Computational Linguistics.
-**[TONE]:** Conversational, engaging, and subtly opinionated (using phrases like 'one might argue that,' and appropriate contractions).
-Follow these steps:
-1. **Synthesize and Ground:** Extract the actual logical meaning behind the metaphors, translating the high-level concepts into clear, professional, yet informal prose.
-2. **Inject Human Flaws:** Introduce minor stylistic 'imperfections,' such as starting one or two sentences with 'And' or 'But.'
-3. **Format:** Output the final text as a single, coherent, and well-flowing article ready for publication.
-Metaphorical Essay to Synthesize:
-[INSERT THE *EXACT* OUTPUT FROM PROMPT 2 HERE]`;
-
-// ≈ Token-Schätzer und Budget-Rechner für Claude 3 Sonnet (Bedrock)
-const CLAUDE3_SONNET_CONTEXT = 200_000; // Kontextfenster (Eingabe + Ausgabe)
-const OUTPUT_HARD_CEILING = 12_000; // sehr großzügige Obergrenze für Ausgabe
-const SAFETY_MARGIN = 2_000; // Puffer ggü. dem Kontextfenster
-const MIN_OUTPUT_TOKENS = 512; // sinnvolle Untergrenze
-
-// grobe Token-Schätzung: ~4 Zeichen ≈ 1 Token (robust, schnell, ausreichend genau)
-function approxTokens(s?: string) {
-  return Math.max(0, Math.ceil((s?.length ?? 0) / 4));
-}
-
-// Overhead-Puffer für Role/Message-Struktur usw.
-function promptTokens(system: string, user: string) {
-  const overhead = 64;
-  return approxTokens(system) + approxTokens(user) + overhead;
-}
-
-/**
- * Ermittelt ein sehr hohes, aber sicheres max_tokens Budget:
- * - nutzt verbleibendes Kontextbudget (Kontextfenster - Prompt - Sicherheitsmarge)
- * - deckelt mit großem "Hard Ceiling", damit keine ausufernden Antworten/Kosten entstehen
- * - garantiert eine Untergrenze (z. B. 512 Tokens)
- */
-function computeMaxTokens(system: string, user: string) {
-  const used = promptTokens(system, user);
-  const remaining = Math.max(0, CLAUDE3_SONNET_CONTEXT - SAFETY_MARGIN - used);
-  // Ergebnis ist "praktisch unlimitiert" für eure Texte (<= 2000 Wörter),
-  // gleichzeitig vor Ausreißern geschützt.
-  return Math.max(MIN_OUTPUT_TOKENS, Math.min(OUTPUT_HARD_CEILING, remaining));
-}
 
 @Injectable()
 export class AppService {
   private s3 = new S3Client({ region: REGION });
   private sqs = new SQSClient({ region: REGION });
   private db = new DynamoDBClient({ region: REGION });
-  // Bedrock Runtime Client
-  private bedrock = new BedrockRuntimeClient({ region: BEDROCK_REGION });
 
-  // --- Normalisierung: keine Em-Dashes, keine Zeilenumbrüche, Whitespaces sauber ---
-  private normalizeOutput(raw: string): string {
-    if (!raw) return '';
-    return raw
-      .replace(/\u2014/g, '-')
-      .replace(/[\r\n]+/g, ' ')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-  }
-
-  private pickOutputText(data: any): string {
-    if (typeof data?.output_text === 'string' && data.output_text.trim()) {
-      return data.output_text;
-    }
-
-    if (
-      typeof data?.response?.output_text === 'string' &&
-      data.response.output_text.trim()
-    ) {
-      return data.response.output_text;
-    }
-
-    const outputs: any[] = [];
-    if (Array.isArray(data?.output)) {
-      outputs.push(...data.output);
-    }
-    if (Array.isArray(data?.response?.output)) {
-      outputs.push(...data.response.output);
-    }
-
-    const chunks: string[] = [];
-
-    for (const item of outputs) {
-      const content = Array.isArray(item?.content) ? item.content : [];
-      for (const c of content) {
-        if (c?.type === 'output_text' && typeof c?.text === 'string') {
-          chunks.push(c.text);
-        } else if (c?.type === 'text' && typeof c?.text === 'string') {
-          chunks.push(c.text);
-        }
-      }
-    }
-
-    if (chunks.length) {
-      return chunks.join('');
-    }
-
-    if (typeof data?.choices?.[0]?.message?.content === 'string') {
-      return data.choices[0].message.content;
-    }
-
-    return '';
-  }
-
-  private async bedrockClaudeMessages(params: {
-    system: string;
-    user: string;
-    temperature?: number;
-    maxTokens?: number;
-    topP?: number;
-  }) {
-    const { system, user } = params;
-    const temperature =
-      typeof params.temperature === 'number' ? params.temperature : 0.85; // default wie gewünscht
-    const top_p = typeof params.topP === 'number' ? params.topP : 0.9; // default wie gewünscht
-
-    if (!BEDROCK_INFERENCE_PROFILE_ARN && !BEDROCK_MODEL_ID) {
-      throw new BadRequestException(
-        'Bedrock not configured: set BEDROCK_INFERENCE_PROFILE_ARN or BEDROCK_MODEL_ID',
-      );
-    }
-
-    const max_tokens =
-      typeof params.maxTokens === 'number' && params.maxTokens > 0
-        ? Math.floor(params.maxTokens)
-        : computeMaxTokens(system || '', user || '');
-
-    const body: any = {
-      anthropic_version: 'bedrock-2023-05-31',
-      messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
-      temperature,
-      top_p,
-      max_tokens,
-    };
-    if (system && system.trim()) body.system = system;
-
-    const modelIdForCall =
-      BEDROCK_INFERENCE_PROFILE_ARN &&
-      BEDROCK_INFERENCE_PROFILE_ARN.trim().length > 0
-        ? BEDROCK_INFERENCE_PROFILE_ARN
-        : BEDROCK_MODEL_ID;
-
-    if (!modelIdForCall) {
-      throw new BadRequestException(
-        'Bedrock not configured: set BEDROCK_INFERENCE_PROFILE_ARN or BEDROCK_MODEL_ID',
-      );
-    }
-
-    const resp = await this.bedrock.send(
-      new InvokeModelCommand({
-        modelId: modelIdForCall,
-        contentType: 'application/json',
-        accept: 'application/json',
-        body: JSON.stringify(body),
-      }),
-    );
-
-    const jsonStr =
-      typeof resp.body === 'string'
-        ? resp.body
-        : new TextDecoder('utf-8').decode(resp.body as Uint8Array);
-
-    const data = JSON.parse(jsonStr);
-
-    const pieces = Array.isArray(data?.content)
-      ? data.content
-          .map((c: any) => (typeof c?.text === 'string' ? c.text : ''))
-          .filter(Boolean)
-      : [];
-
-    return pieces.join('');
-  }
-
+  
   getHello(): string {
     return 'Hello World!';
   }
@@ -378,82 +161,6 @@ export class AppService {
     );
 
     return { jobId, language: lang };
-  }
-
-  async rewrite(body: { text: string; model?: string; temperature?: number }) {
-    const text = (body.text || '').trim();
-    if (!text) {
-      throw new BadRequestException('text required');
-    }
-
-    // temperature und top_p werden pro Aufruf explizit gesetzt (0.85 / 0.9)
-
-    const layer1User = PROMPT_LAYER_1_TEMPLATE.replace(
-      "[INSERT USER'S RAW AI TEXT HERE]",
-      text,
-    );
-
-    let layer1Raw = '';
-    try {
-      layer1Raw = await this.bedrockClaudeMessages({
-        system: '',
-        user: layer1User,
-        temperature: 0.85,
-      });
-    } catch (e: any) {
-      throw new BadRequestException(
-        `Bedrock error (layer 1): ${e?.message || e}`,
-      );
-    }
-
-    const layer2User = PROMPT_LAYER_2_TEMPLATE.replace(
-      '[INSERT THE *EXACT* OUTPUT FROM PROMPT 1 HERE]',
-      layer1Raw,
-    );
-
-    let layer2Raw = '';
-    try {
-      layer2Raw = await this.bedrockClaudeMessages({
-        system: '',
-        user: layer2User,
-        temperature: 0.85,
-      });
-    } catch (e: any) {
-      throw new BadRequestException(
-        `Bedrock error (layer 2): ${e?.message || e}`,
-      );
-    }
-
-    const layer3User = PROMPT_LAYER_3_TEMPLATE.replace(
-      '[INSERT THE *EXACT* OUTPUT FROM PROMPT 2 HERE]',
-      layer2Raw,
-    );
-
-    let layer3Raw = '';
-    try {
-      layer3Raw = await this.bedrockClaudeMessages({
-        system: '',
-        user: layer3User,
-        temperature: 0.85,
-      });
-    } catch (e: any) {
-      throw new BadRequestException(
-        `Bedrock error (layer 3): ${e?.message || e}`,
-      );
-    }
-
-    const output = this.normalizeOutput(layer3Raw);
-
-    const modelDescriptor =
-      BEDROCK_INFERENCE_PROFILE_ARN ||
-      BEDROCK_MODEL_ID ||
-      'anthropic.claude-3-sonnet-20240229-v1:0';
-
-    return {
-      provider: 'bedrock',
-      model: modelDescriptor,
-      output,
-    };
   }
 
   // ---- Status lesen ----

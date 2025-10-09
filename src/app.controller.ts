@@ -10,7 +10,6 @@ import {
 import { AppService } from './app.service';
 import { UploadUrlDto } from './dto/upload-url.dto';
 import { ExtractDto } from './dto/extract.dto';
-import { RewriteDto } from './dto/rewrite.dto';
 
 @Controller()
 export class AppController {
@@ -42,14 +41,6 @@ export class AppController {
     if (!body?.jobId || !body?.s3Key)
       throw new BadRequestException('jobId & s3Key required');
     return this.app.enqueueJob(body.jobId, body.s3Key, body.ocr, body.language);
-  }
-
-  @Post('/rewrite')
-  rewrite(@Body() body: RewriteDto) {
-    if (!body?.text || !body.text.trim()) {
-      throw new BadRequestException('text required');
-    }
-    return this.app.rewrite(body);
   }
 
   @Get('/status/:id')

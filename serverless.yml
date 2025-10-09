@@ -1,0 +1,88 @@
+service: leitnerai-api
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: eu-north-1
+  architecture: x86_64
+  iam:
+    role:
+      statements:
+        # --- S3: INBOX & RESULTS ---
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:HeadObject
+          Resource:
+            - arn:aws:s3:::leitnerai-inbox-7634-8705-3303/*
+            - arn:aws:s3:::leitnerai-results-7634-8705-3303/*
+        # --- DynamoDB: Jobs-Tabelle ---
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:GetItem
+            - dynamodb:UpdateItem
+          Resource:
+            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/leitnerai-jobs
+        # --- SQS: Send (API) + Receive/Delete (Worker) ---
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:GetQueueAttributes
+          Resource:
+            - arn:aws:sqs:${aws:region}:${aws:accountId}:leitnerai-jobs-queue
+        - Effect: Allow
+          Action:
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+          Resource:
+            - arn:aws:sqs:${aws:region}:${aws:accountId}:leitnerai-jobs-queue
+        # --- Polly ---
+        - Effect: Allow
+          Action:
+            - polly:SynthesizeSpeech
+          Resource: '*'
+
+  environment:
+    AWS_REGION: ${aws:region}
+    INBOX_BUCKET: leitnerai-inbox-7634-8705-3303
+    RESULTS_BUCKET: leitnerai-results-7634-8705-3303
+    TABLE_NAME: leitnerai-jobs
+    SQS_QUEUE_URL: https://sqs.${aws:region}.amazonaws.com/${aws:accountId}/leitnerai-jobs-queue
+    QUEUE_URL: https://sqs.${aws:region}.amazonaws.com/${aws:accountId}/leitnerai-jobs-queue
+    POLLY_REGION: eu-west-1
+    POLLY_ENGINE_DEFAULT: neural
+    # FFMPEG_PATH leer lassen -> dein Code nutzt ffmpeg-static automatisch
+
+package:
+  patterns:
+    - '!**'
+    - 'dist/**'
+    - 'node_modules/**'
+    - 'package.json'
+    - 'package-lock.json'
+
+functions:
+  api:
+    handler: dist/lambda.handler
+    timeout: 60 # ggf. auf 90/120 erhöhen, falls /tts/dialog knapp wird
+    memorySize: 1536 # ffmpeg + Polly angenehmer
+    events:
+      - httpApi:
+          method: ANY
+          path: /
+      - httpApi:
+          method: ANY
+          path: /{proxy+}
+
+  worker:
+    handler: dist/worker.handler
+    timeout: 120
+    memorySize: 1024
+    events:
+      - sqs:
+          arn: arn:aws:sqs:${aws:region}:${aws:accountId}:leitnerai-jobs-queue
+          batchSize: 1
